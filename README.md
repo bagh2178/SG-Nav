@@ -28,7 +28,6 @@ Method Pipeline:
 ## Getting Started
 For environment setup and dataset preparation, please follow:
 * [Installation](./docs/installation.md)
-* [Dataset Preparation](./docs/dataset_preparation.md)
 
 For evaluation, please follow:
 * [Evaluation](./docs/run.md)
