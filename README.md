@@ -1,58 +1,39 @@
-# SG-Nav: Online 3D Scene Graph Prompting for LLM-based Zero-shot Object Navigation
-### [Paper](https://arxiv.org/) | [Project Page](https://bagh2178.github.io/SG-Nav/)
+The instruction for implementation of SG-Nav for object-goal navigation on MP3D dataset. 
 
-> SG-Nav: Online 3D Scene Graph Prompting for LLM-based Zero-shot Object Navigation
-> [Hang Yin](https://bagh2178.github.io/), [Xiuwei Xu](https://xuxw98.github.io/), [Zhenyu Wu](https://gary3410.github.io/), [Jie Zhou](https://scholar.google.com/citations?user=6a79aPwAAAAJ&hl=en&authuser=1), [Jiwen Lu](http://ivg.au.tsinghua.edu.cn/Jiwen_Lu/)
+### Step 1
+Download Matterport3D scene dataset from this [link](https://niessner.github.io/Matterport/).
+Download object-goal navigation episodes dataset from this [link](https://github.com/facebookresearch/habitat-lab/blob/main/DATASETS.md)
+Then change the scene dataset path(SCENES_DIR) and episode dataset path(DATA_PATH) in config file `configs/challenge_objectnav2021.local.rgbd.yaml`.
 
+### Step 2
+Install [habitat-sim](https://github.com/facebookresearch/habitat-sim) and [habitat-lab](https://github.com/facebookresearch/habitat-lab) according to their github page.
 
-We propose a training-free object-goal navigation framework by leveraging LLM and VFMs. We construct an online hierarchical 3D scene graph and prompt LLM to exploit structure information contained in subgraphs for zero-shot decision making.
-
-
-## News
-- [2024/09/26]: Accepted to NeurIPS 2024.
-
-
-## Demo
-![demo](./assets/demo1.gif)
-
-![demo](./assets/demo2.gif)
-
-Demos are a little bit large; please wait a moment to load them. Welcome to the home page for more complete demos and detailed introductions.
-
-
-## Method 
-
-Method Pipeline:
-![overview](./assets/pipeline.png)
-
-## Getting Started
-For environment setup and dataset preparation, please follow:
-* [Installation](./docs/installation.md)
-
-For evaluation, please follow:
-* [Evaluation](./docs/run.md)
-
-
-
-## TODO List
-- [ ] Release code.
-
-## Contributors
-- [Hang Yin](https://bagh2178.github.io/)
-- [Xiuwei Xu](https://xuxw98.github.io/)
-
-Both advised by [Jiwen Lu](https://ivg.au.tsinghua.edu.cn/Jiwen_Lu/).
-
-## Acknowledgement
-We thank a lot for the 
-
-
-## Citation
+### Step 3
+Install conda environment
 ```
-@article{yin2024sgnav, 
-      title={SG-Nav: Online 3D Scene Graph Prompting for LLM-based Zero-shot Object Navigation}, 
-      author={Hang Yin and Xiuwei Xu and Zhenyu Wu and Jie Zhou and Jiwen Lu},
-      journal={arXiv preprint arXiv},
-      year={2024}
-}
+conda env create -f SG_Nav.yml
 ```
+
+### Step 4
+Install GLIP
+```
+cd GLIP
+python setup.py build develop --user
+cd MODEL
+wget https://huggingface.co/GLIPModel/GLIP/resolve/main/glip_large_model.pth
+```
+
+### Step 5
+Install [ConceptGraph](https://github.com/concept-graphs/concept-graphs) according to the github.
+
+### Step 6
+Run SG-Nav on MP3D
+```
+python SG_Nav.py --evaluation local --reasoning both
+```
+Or run SG-Nav with multiprocess
+
+```
+python start_multiprocess.py
+```
+
