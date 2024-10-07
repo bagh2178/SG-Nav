@@ -36,7 +36,7 @@ For evaluation, please follow:
 
 
 ## TODO List
-- [] Release code.
+- [ ] Release code.
 
 ## Contributors
 - [Hang Yin](https://bagh2178.github.io/)
