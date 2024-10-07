@@ -1,20 +1,24 @@
 # SG-Nav: Online 3D Scene Graph Prompting for LLM-based Zero-shot Object Navigation
 ### [Paper](https://arxiv.org/) | [Project Page](https://bagh2178.github.io/SG-Nav/)
 
-> SG-Nav: Online 3D Scene Graph Prompting for LLM-based Zero-shot Object Navigation
-> [Hang Yin](https://bagh2178.github.io/), [Xiuwei Xu](https://xuxw98.github.io/), [Zhenyu Wu](https://gary3410.github.io/), [Jie Zhou](https://scholar.google.com/citations?user=6a79aPwAAAAJ&hl=en&authuser=1), [Jiwen Lu](http://ivg.au.tsinghua.edu.cn/Jiwen_Lu/)
+> SG-Nav: Online 3D Scene Graph Prompting for LLM-based Zero-shot Object Navigation  
+> [Hang Yin](https://bagh2178.github.io/)*, [Xiuwei Xu](https://xuxw98.github.io/)\* $^\dagger$, [Zhenyu Wu](https://gary3410.github.io/), [Jie Zhou](https://scholar.google.com/citations?user=6a79aPwAAAAJ&hl=en&authuser=1), [Jiwen Lu](http://ivg.au.tsinghua.edu.cn/Jiwen_Lu/)$^\ddagger$  
+
+\* Equal contribution $\dagger$ Project leader $\ddagger$ Corresponding author
 
 
-We propose a training-free object-goal navigation framework by leveraging LLM and VFMs. We construct an online hierarchical 3D scene graph and prompt LLM to exploit structure information contained in subgraphs for zero-shot decision making.
+We propose a <b>zero-shot</b> object-goal navigation framework by constructing an online 3D scene graph to prompt LLMs. Our method can be directly applied to different kinds of scenes and categories <b>without training</b>.
 
 
 ## News
-- [2024/09/26]: Accepted to NeurIPS 2024.
+- [2024/09/26]: SG-Nav is accepted to NeurIPS 2024!
 
 
 ## Demo
+### Scene1:
 ![demo](./assets/demo1.gif)
 
+### Scene2:
 ![demo](./assets/demo2.gif)
 
 Demos are a little bit large; please wait a moment to load them. Welcome to the home page for more complete demos and detailed introductions.
@@ -33,19 +37,8 @@ For evaluation, please follow:
 * [Evaluation](./docs/run.md)
 
 
-
-## TODO List
-- [ ] Release code.
-
-## Contributors
-- [Hang Yin](https://bagh2178.github.io/)
-- [Xiuwei Xu](https://xuxw98.github.io/)
-
-Both advised by [Jiwen Lu](https://ivg.au.tsinghua.edu.cn/Jiwen_Lu/).
-
-## Acknowledgement
-We thank a lot for the 
-
+## Code Structure
+TODO.
 
 ## Citation
 ```
