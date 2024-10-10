@@ -7,7 +7,7 @@
 \* Equal contribution $\dagger$ Project leader $\ddagger$ Corresponding author
 
 
-We propose a <b>zero-shot</b> object-goal navigation framework by constructing an online 3D scene graph to prompt LLMs. Our method can be directly applied to different kinds of scenes and categories <b>without training</b>.
+We propose a <b>zero-shot</b> object-goal navigation framework by constructing an online 3D scene graph to prompt LLMs. Our method can be directly applied to different kinds of scenes and categories <b>without training</b>. [中文解读](https://zhuanlan.zhihu.com/p/909651478).
 
 
 ## News
