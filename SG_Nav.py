@@ -171,25 +171,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         # self.goal_verification_list = goal_verification_list_MP3D
         # self.scenegraph = SceneGraph(agent=self)
 
-
-        self.experiment_name = '2024-03-28-only_distance'
-        self.experiment_name = '2024-03-28-only_conceptgraph_gpt'
-        self.experiment_name = '2024-04-11-ESC'
-        self.experiment_name = '2024-04-22-contrast[1]Gow'
-        self.experiment_name = '2024-04-22-contrast[2]ESC_wo_room'
-        self.experiment_name = '2024-04-22-contrast[3]ESC_wo_object'
-        self.experiment_name = '2024-04-22-contrast[4]ESC'
-        self.experiment_name = '2024-04-23-node'
-        self.experiment_name = '2024-04-27-multi_view_varify'
-        self.experiment_name = '2024-05-01-multi_view_varify-category_wise'
-        self.experiment_name = '2024-05-05-test'
-        self.experiment_name = '2024-05-07-triple_view_varify'
-        self.experiment_name = '2024-05-11-found_goal_times_threshold={}'.format(self.found_goal_times_threshold)
-        self.experiment_name = '2024-05-16-found_goal_times_threshold={}'.format(self.found_goal_times_threshold)
-        self.experiment_name = '2024-05-21-visualization'
-        self.experiment_name = '2024-05-26-visualization-SG'
-        self.experiment_name = '2024-05-22-visualization-SG'
-        self.experiment_name = '2024-05-22-visualization'
+        self.experiment_name = 'experiment_0'
 
         if self.split:
             self.experiment_name = self.experiment_name + f'/[{self.args.split_l}:{self.args.split_r}]'
