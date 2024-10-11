@@ -258,7 +258,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.history_pose = []
         self.loop_time = 0
         self.stuck_time = 0
-        self.found_goal_times_threshold = self.threshold_list[self.benchmark._env.current_episode.object_category]
+        # self.found_goal_times_threshold = self.threshold_list[self.benchmark._env.current_episode.object_category]
         ###########
         self.current_obj_predictions = []
         self.obj_locations = [[] for i in range(21)] # length equal to all the objects in reference matrix 
