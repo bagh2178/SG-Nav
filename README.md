@@ -42,7 +42,7 @@ For evaluation, please follow:
 @article{yin2024sgnav, 
       title={SG-Nav: Online 3D Scene Graph Prompting for LLM-based Zero-shot Object Navigation}, 
       author={Hang Yin and Xiuwei Xu and Zhenyu Wu and Jie Zhou and Jiwen Lu},
-      journal={arXiv preprint arXiv},
+      journal={arXiv preprint arXiv:2410.08189},
       year={2024}
 }
 ```
