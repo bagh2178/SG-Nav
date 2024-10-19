@@ -79,8 +79,6 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.found_goal_times = 0
         self.threshold_list = {'bathtub': 3, 'bed': 3, 'cabinet': 2, 'chair': 1, 'chest_of_drawers': 3, 'clothes': 2, 'counter': 1, 'cushion': 3, 'fireplace': 3, 'gym_equipment': 2, 'picture': 3, 'plant': 3, 'seating': 0, 'shower': 2, 'sink': 2, 'sofa': 2, 'stool': 2, 'table': 1, 'toilet': 3, 'towel': 2, 'tv_monitor': 0}
         self.found_goal_times_threshold = 3
-        # self.double_found_goal = False
-        # self.triple_found_goal = False
         self.correct_room = False
         self.changing_room = False
         self.changing_room_steps = 0
@@ -103,8 +101,6 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         ### ------ init glip model ------ ###
         config_file = "GLIP/configs/pretrain/glip_Swin_L.yaml" 
         weight_file = "GLIP/MODEL/glip_large_model.pth"
-        # config_file = "GLIP/configs/pretrain/glip_Swin_T_O365_GoldG.yaml"
-        # weight_file = "GLIP/MODEL/glip_tiny_model_o365_goldg_cc_sbu.pth"
         glip_cfg.local_rank = 0
         glip_cfg.num_gpus = 1
         glip_cfg.merge_from_file(config_file) 
@@ -167,9 +163,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
 
         ### ----- load scene graph module ----- ###
         self.goal_verification = True
-        # goal_verification_list_MP3D = ['chair', 'cabinet', 'table', 'towel', 'sink', 'bed', 'stool', 'toilet', 'clothes', 'counter', 'chest_of_drawers', 'sofa', 'cushion']
-        # self.goal_verification_list = goal_verification_list_MP3D
-        # self.scenegraph = SceneGraph(agent=self)
+        self.scenegraph = SceneGraph(agent=self)
 
         self.experiment_name = 'experiment_0'
 
@@ -229,8 +223,6 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.current_room_search_step = 0
         self.found_goal = False
         self.found_goal_times = 0
-        # self.double_found_goal = False
-        # self.triple_found_goal = False
         self.ever_long_goal = False
         self.correct_room = False
         self.changing_room = False
@@ -258,7 +250,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.history_pose = []
         self.loop_time = 0
         self.stuck_time = 0
-        # self.found_goal_times_threshold = self.threshold_list[self.benchmark._env.current_episode.object_category]
+        self.found_goal_times_threshold = self.threshold_list[self.benchmark._env.current_episode.object_category]
         ###########
         self.current_obj_predictions = []
         self.obj_locations = [[] for i in range(21)] # length equal to all the objects in reference matrix 
@@ -580,10 +572,6 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             # gray_map[:, int(stg_y)-1:int(stg_y)+1, int(stg_x)-1:int(stg_x)+1] = 0
             # gray_map[2, int(stg_y)-1:int(stg_y)+1, int(stg_x)-1:int(stg_x)+1] = 1
             free_map = self.fbe_free_map.cpu().numpy()[0,0,::-1].copy() > 0.5
-            # 有哪些信息要加入图中：1.目标是中间目标还是最终目标要体现。2.所有边界点的分数值要可视化。3.哪些边界点是考虑范围内的。4.llava的回答，chatgpt的回答要写在图里。5.step的值要写在图里。
-            # 6.最终目标的类别要写进去。7.scenegraph可视化在图里
-            # 速度太慢的问题优化一下
-            # 1.input(包括3D点云2D图像和物体融合的feature)做一页ppt 2.调研快速建图（2D和3D的zeroshot论文）3.scenegragh的利用，可以取边界和图节点的并集 4.scenegraph的利用，scenegraph可以影响agent路径的选择
             # scenegraph_map = gray_map.clone().detach()
             # scenegraph_map = self.generate_scenegraph_map(scenegraph_map)
             
@@ -1255,29 +1243,22 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         return image
     
     def draw_bboxes_with_labels(self, rgb, bboxes, labels, color='red'):  
-        # 读取图片  
         # img = Image.open(image_path)  
         # rgb = np.transpose(rgb, (1, 2, 0))
         img = Image.fromarray(rgb)
         draw = ImageDraw.Draw(img)  
         
-        # 遍历每个bbox和标签  
         for bbox, label in zip(bboxes, labels):  
             x1, y1, x2, y2 = bbox  
             
-            # 画出bbox  
             draw.rectangle([x1, y1, x2, y2], outline=color, width=2)  
             
-            # 在bbox上方标注类别  
             # text_width, text_height = draw.textsize(label)  
-            # 假设你有一个字体对象，如果没有指定字体，则使用默认字体  
             font = ImageFont.load_default()  
             
-            # 使用textbbox获取文本的边界框  
             bbox = draw.textbbox((0, 0), label, font=font)  
             left, upper, right, lower = bbox  
             
-            # 计算文本的宽度和高度  
             text_width = right - left  
             text_height = lower - upper  
             # margin = 10  
@@ -1289,9 +1270,8 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         rgb = np.array(img)
         # rgb = np.transpose(rgb, (2, 0, 1))
         return rgb
-        # 显示图片  
         # plt.imshow(img)  
-        # plt.axis('off')  # 不显示坐标轴  
+        # plt.axis('off')
         # plt.show()  
 
     def draw_frontier_score(self, paper_map_trans, frontier_rgb, unknown_rgb):
