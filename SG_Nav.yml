@@ -44,8 +44,6 @@ dependencies:
   - gnutls=3.6.13=h85f3911_1
   - gst-plugins-base=1.18.5=hf529b03_0
   - gstreamer=1.18.5=h76c114f_0
-  - habitat-sim-challenge-2022=0.2.1=py3.7_headless_bullet_linux_f02ce8317b4bcbccf1ed92a6436f6aabc9aecec6
-  - habitat-sim-mutex=1.0=headless_bullet
   - icu=68.2=h9c3ff4c_0
   - imageio=2.21.0=pyhfa7a67d_0
   - imageio-ffmpeg=0.4.7=pyhd8ed1ab_0
@@ -239,8 +237,6 @@ dependencies:
       - gym-notices==0.0.8
       - h11==0.14.0
       - h5py==3.8.0
-      - habitat==0.2.1
-      - habitat-sim==0.2.1
       - httpcore==0.17.3
       - httpx==0.24.0
       - huggingface-hub==0.16.4
