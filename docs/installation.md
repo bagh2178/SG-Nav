@@ -8,7 +8,7 @@ According to your dataset path, set the scene dataset path (SCENES_DIR) and epis
 
 **Step 2**
 Install habitat-sim according to [here](https://github.com/facebookresearch/habitat-sim).
-Install habitat-lab according to [here](https://github.com/facebookresearch/habitat-lab).
+Install habitat-lab according to [here](https://github.com/facebookresearch/habitat-lab) or install habitat-lab with ``pip install -e habitat-lab``.
 
 **Step 3**
 Install the conda environment we provided.
