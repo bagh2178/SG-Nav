@@ -41,7 +41,7 @@ from pslpython.partition import Partition
 from pslpython.predicate import Predicate
 from pslpython.rule import Rule
 
-from conceptgraph.scripts.scenegraph import SceneGraph
+from .scenegraph import SceneGraph
 
 
 ADDITIONAL_PSL_OPTIONS = {
@@ -268,9 +268,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.last_location = np.array([0.,0.])
         self.current_stuck_steps = 0
         self.total_stuck_steps = 0
-
-        if hasattr(self, 'scenegraph'):
-            self.scenegraph.reset()
+        self.scenegraph.reset()
         
         os.system(f'rm -r {self.save_image_dir}')
         
@@ -340,12 +338,9 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                         #     self.triple_found_goal = True
                         # self.double_found_goal = True
                         self.found_goal_times = self.found_goal_times + 1
-                    if hasattr(self, 'scenegraph'):
-                        goal_gps = self.get_goal_gps(observations, shortest_distance_angle, shortest_distance)
-                        goal_xy = [int((self.map_size_cm/200+self.goal_gps[0])*100/self.resolution), int((self.map_size_cm/200+self.goal_gps[1])*100/self.resolution)]
-                        verification_passed = self.scenegraph.verify_goal(goal_xy)
-                    else:
-                        verification_passed = True
+                    goal_gps = self.get_goal_gps(observations, shortest_distance_angle, shortest_distance)
+                    goal_xy = [int((self.map_size_cm/200+self.goal_gps[0])*100/self.resolution), int((self.map_size_cm/200+self.goal_gps[1])*100/self.resolution)]
+                    verification_passed = self.scenegraph.verify_goal(goal_xy)
                     if verification_passed:
                         self.found_goal = True
                     self.found_long_goal = False
@@ -410,14 +405,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.rgb = observations["rgb"][:,:,[2,1,0]]
         observations["rgb_annotated"] = observations["rgb"]
 
-        if hasattr(self, 'scenegraph'):
-            self.scenegraph.update_observation(observations)
-            # self.scenegraph_group_list = self.scenegraph.get_scenegraph_object_list()
-            # self.scenegraph_group_list = self.scenegraph.get_scenegraph_subgraph_list()
-            # for group in self.scenegraph_group_list:
-            #     x = int(group['center'][0]*100/self.resolution)
-            #     y = int(group['center'][1]*100/self.resolution)
-            #     group['xy'] = [x, y]
+        self.scenegraph.update_observation(observations)
         
         self.update_map(observations)
         self.update_free_map(observations)
@@ -558,8 +546,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             save_map = copy.deepcopy(torch.from_numpy(traversible))
             gray_map = torch.stack((save_map, save_map, save_map))
             paper_obstacle_map = copy.deepcopy(gray_map)[:,1:-1,1:-1]
-            if hasattr(self, 'scenegraph'):
-                gray_map = self.visualize_scenegraph_map(gray_map)
+            gray_map = self.visualize_scenegraph_map(gray_map)
             gray_map[:, int((self.map_size_cm/100-self.full_pose[1])*100/self.resolution)-2:int((self.map_size_cm/100-self.full_pose[1])*100/self.resolution)+2, int(self.full_pose[0]*100/self.resolution)-2:int(self.full_pose[0]*100/self.resolution)+2] = 0
             gray_map[0, int((self.map_size_cm/100-self.full_pose[1])*100/self.resolution)-2:int((self.map_size_cm/100-self.full_pose[1])*100/self.resolution)+2, int(self.full_pose[0]*100/self.resolution)-2:int(self.full_pose[0]*100/self.resolution)+2] = 1
             goal_size = 3 if self.found_goal else 2
@@ -572,8 +559,6 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             # gray_map[:, int(stg_y)-1:int(stg_y)+1, int(stg_x)-1:int(stg_x)+1] = 0
             # gray_map[2, int(stg_y)-1:int(stg_y)+1, int(stg_x)-1:int(stg_x)+1] = 1
             free_map = self.fbe_free_map.cpu().numpy()[0,0,::-1].copy() > 0.5
-            # scenegraph_map = gray_map.clone().detach()
-            # scenegraph_map = self.generate_scenegraph_map(scenegraph_map)
             
             paper_map = torch.zeros_like(paper_obstacle_map)
             paper_map_trans = paper_map.permute(1,2,0)
@@ -584,8 +569,8 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             free_rgb = colors.to_rgb('#E7E7E7')
             paper_map_trans[self.fbe_free_map.cpu().numpy()[0,0,::-1]>0.5,:] = torch.tensor( free_rgb).double()
             frontier_rgb = colors.to_rgb('indianred')
-            # selem = skimage.morphology.disk(1)
-            # selem = skimage.morphology.disk(4)
+            selem = skimage.morphology.disk(1)
+            selem = skimage.morphology.disk(4)
             # free_map[skimage.morphology.binary_dilation(free_map, selem)] = 1
             # paper_map_trans[(free_map==1)*(paper_map_trans[:,:,0]==torch.tensor(unknown_rgb)[0]).numpy(),:] = torch.tensor(frontier_rgb).double()
             paper_map_trans = self.draw_frontier_score(paper_map_trans, frontier_rgb, unknown_rgb)
@@ -597,39 +582,8 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
 
 
 
-            # makedir(f'figures/{self.experiment_name}/rgb')
-            # makedir(f'figures/{self.experiment_name}/map')
-            # makedir(f'figures/{self.experiment_name}/scenegraph_map')
-            # makedir(f'figures/{self.experiment_name}/free_map')
-            # makedir(f'figures/{self.experiment_name}/paper_map')
-            # self.makedir(f'figures/{self.experiment_name}/image')
-            # paper_map_trans = paper_map_trans.permute(2,0,1)
-            # paper_map_trans = torch.cat([paper_map_trans, torch.zeros(paper_map_trans.shape[0], gray_map.shape[1] - paper_map_trans.shape[1], paper_map_trans.shape[2])], dim=1)
-            # gray_map = gray_map / gray_map.max()
-            # rgb = torch.from_numpy(observations["rgb"]/255).float().permute(2,0,1)
-            # text_image = torch.ones(rgb.shape[0], gray_map.shape[1] - rgb.shape[1], rgb.shape[2])
-            # text = [
-            #     'navigate_steps:{}'.format(self.navigate_steps),
-            #     'obj_goal:{}'.format(self.obj_goal),
-            #     'action:{}'.format(number_action),
-            # ]
-            # gray_map = self.add_text(gray_map, text)
-            # rgb = torch.cat([rgb, text_image], dim=1)
-            # all_map = torch.cat([gray_map, rgb], dim=2)
-            # save_image(torch.from_numpy(observations["rgb"]/255).float().permute(2,0,1), f'figures/{self.experiment_name}/rgb/img'+str(self.navigate_steps)+'.png')
-            # dist= torch.stack((torch.from_numpy(self.planner.fmm_dist), torch.from_numpy(self.planner.fmm_dist), torch.from_numpy(self.planner.fmm_dist)))
-            # save_image((dist / dist.max()), 'figures/dist/img'+str(self.navigate_steps)+'.png')
-            # save_image((gray_map / gray_map.max()), f'figures/{self.experiment_name}/map/img'+str(self.navigate_steps)+'.png')
-            # save_image((scenegraph_map / scenegraph_map.max()), f'figures/{self.experiment_name}/scenegraph_map/img'+str(self.navigate_steps)+'.png')
-            # save_image((torch.from_numpy(free_map) / free_map.max()), f'figures/{self.experiment_name}/free_map/img'+str(self.navigate_steps)+'.png')
-            # if not os.path.exists(f'figures/{self.experiment_name}/paper_map'):
-            #     os.makedirs(f'figures/{self.experiment_name}/paper_map')
-            # save_image(paper_map_trans, f'figures/{self.experiment_name}/paper_map/img_'+str(self.navigate_steps)+'.png')
-            # save_image(all_map, f'figures/{self.experiment_name}/image/img'+str(self.navigate_steps)+'.png')
-
             # self.visualize_obj_goal(paper_map_trans)
             self.visualize_agent_and_goal(paper_map_trans)
-            self.visualize_scenegraph_map(paper_map_trans)
             paper_map_trans = paper_map_trans / paper_map_trans.max()
             rgb = torch.from_numpy(observations["rgb_annotated"] / 255).float().permute(2, 0, 1)
             text_image = torch.ones(rgb.shape[0], paper_map_trans.shape[1] - rgb.shape[1], rgb.shape[2])
@@ -640,36 +594,10 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                 'object_category: {}'.format(self.benchmark._env.current_episode.object_category),
                 'geodesic_distance: {}'.format(self.benchmark._env.current_episode.info['geodesic_distance']),
                 'euclidean_distance: {}'.format(self.benchmark._env.current_episode.info['euclidean_distance']),
-                '',
-                'total_steps: {}'.format(self.total_steps),
-                'navigate_steps: {}'.format(self.navigate_steps),
-                'move_steps: {}'.format(self.move_steps),
-                'not_move_steps: {}'.format(self.not_move_steps),
-                'loop_time: {}'.format(self.loop_time),
-                'stuck_time: {}'.format(self.stuck_time),
-                'action: {} {}'.format(number_action, self._POSSIBLE_ACTIONS[number_action]),
-                'distance_to_goal: {}'.format(metrics['distance_to_goal']),
-                'spl: {}'.format(metrics['spl']),
-                'softspl: {}'.format(metrics['softspl']),
-                'found_goal: {}'.format(self.found_goal),
-                'found_long_goal: {}'.format(self.found_long_goal),
-                'ever_long_goal: {}'.format(self.ever_long_goal),
-                'found_goal_times: {}'.format(self.found_goal_times),
-                'found_goal_times_threshold: {}'.format(self.found_goal_times_threshold),
-                'goal_verification: {}'.format(self.goal_verification),
-                'using_random_goal: {}'.format(self.using_random_goal),
-                'move_since_random: {}'.format(self.move_since_random),
             ]
             paper_map_trans = self.add_text(paper_map_trans, text)
-            if hasattr(self, 'scenegraph'):
-                text = self.scenegraph.get_scene_graph_text() + '\n' + self.scenegraph.get_reason_text()
-                text_image = self.add_text(text_image, text)
             rgb = torch.cat([rgb, text_image], dim=1)
             self.agent_state_image = torch.cat([paper_map_trans, rgb], dim=2)
-            # self.save_image_dir = f'figures/{self.experiment_name}/image'
-            # if not os.path.exists(self.save_image_dir):
-            #     os.makedirs(self.save_image_dir)
-            # save_image(agent_state_image, f'figures/{self.experiment_name}/image/img_{self.navigate_steps}.png')
 
             try:
                 pose_dict = json.load(open('figures/pose/pose.json', 'r'))
@@ -702,7 +630,6 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                     new_labels.append(self.glip_demo.entities[i - self.glip_demo.plus])
                 else:
                     new_labels.append('object')
-            # labels = [self.entities[i - self.plus] for i in labels ]
         else:
             new_labels = ['object' for i in labels]
         return new_labels
@@ -714,13 +641,13 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         select a frontier using commonsense and PSL and return a GPS
         """
         fbe_map = torch.zeros_like(self.full_map[0,0])
-        fbe_map[self.fbe_free_map[0,0]>0] = 1 # first free 
+        fbe_map[self.fbe_free_map[0,0]>0] = 1  # first free 
         fbe_map[skimage.morphology.binary_dilation(self.full_map[0,0].cpu().numpy(), skimage.morphology.disk(4))] = 3 # then dialte obstacle
 
         fbe_cp = copy.deepcopy(fbe_map)
         fbe_cpp = copy.deepcopy(fbe_map)
-        fbe_cp[fbe_cp==0] = 4 # don't know space is 4
-        fbe_cp[fbe_cp<4] = 0 # free and obstacle
+        fbe_cp[fbe_cp == 0] = 4  # don't know space is 4
+        fbe_cp[fbe_cp < 4] = 0  # free and obstacle
         selem = skimage.morphology.disk(1)
         fbe_cpp[skimage.morphology.binary_dilation(fbe_cp.cpu().numpy(), selem)] = 0 # don't know space is 0 dialate unknown space
         
@@ -753,32 +680,15 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         scores = np.zeros((num_16_frontiers))
                 
         if self.args.reasoning in ['both', 'room']:
-            if self.args.PSL_infer == 'optim':
-                for predicate in self.psl_model.get_predicates().values():
-                    if predicate.name() in ['ISNEARROOM', 'CHOOSE', 'SHORTDIST']:
-                        predicate.clear_data()
-            # for each frontier, calculate the rooms that within 0.6 meters of this frontier
             for i, loc in enumerate(frontier_locations_16):
                 sub_room_map = self.room_map[0,:,max(0,loc[0]-12):min(self.map_size-1,loc[0]+13), max(0,loc[1]-12):min(self.map_size-1,loc[1]+13)].cpu().numpy() # sub_room_map.shape = [9, 25, 25], select the room map around the frontier
                 whether_near_room = np.max(np.max(sub_room_map, 1),1) # whether_near_room.shape = [9], 1*9 wether the frontier is close to each room
-                if self.args.PSL_infer == 'optim':
-                    # feed data
-                    whether_near_room_list = whether_near_room.tolist()
-                    data = pandas.DataFrame([[j, i, whether_near_room_list[j]] for j in range(len(whether_near_room_list))], columns = list(range(3)))
-                    self.psl_model.get_predicate('IsNearRoom').add_data(Partition.OBSERVATIONS, data)
-                else:
-                    ## PSL score calculation using one hot constraint: the score of selecting a frontier
-                    score_1 = np.clip(1-(1-self.prob_array_room)-(1-whether_near_room), 0, 10)  # score_1.shape = [9], prob_array_room.shape = [9]
-                    score_2 = 1- np.clip(self.prob_array_room+(1-whether_near_room), -10,1)  # score_2.shape = [9]
-                    scores[i] = np.sum(score_1) - np.sum(score_2)
+                score_1 = np.clip(1-(1-self.prob_array_room)-(1-whether_near_room), 0, 10)  # score_1.shape = [9], prob_array_room.shape = [9]
+                score_2 = 1- np.clip(self.prob_array_room+(1-whether_near_room), -10,1)  # score_2.shape = [9]
+                scores[i] = np.sum(score_1) - np.sum(score_2)
         
         if self.args.reasoning in ['both', 'obj']:
-            if self.args.PSL_infer == 'optim':
-                for predicate in self.psl_model.get_predicates().values():
-                    if predicate.name() in ['ISNEAROBJ', 'CHOOSE', 'SHORTDIST']:
-                        predicate.clear_data()
             for i in range(21):
-                ## for each object, judge whether each frontier is near one of the object and calculate the score
                 num_obj = len(self.obj_locations[i])
                 if num_obj <= 0:
                     continue
@@ -791,62 +701,28 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                 near_frontier_obj = dist_frontier_obj < 1.6 # k*m 
                 obj_confidence_mtx[near_frontier_obj==False] = 0 # k*m 
                 obj_confidence_max = np.max(obj_confidence_mtx, axis=0)  # (175)
-                if self.args.PSL_infer == 'optim':
-                    # feed data
-                    whether_near_obj_list = obj_confidence_max.tolist()
-                    data = pandas.DataFrame([[i, j, whether_near_obj_list[j]] for j in range(len(whether_near_obj_list)) if whether_near_obj_list[j] > 0], columns = list(range(3)))
-                    self.psl_model.get_predicate('IsNearObj').add_data(Partition.OBSERVATIONS, data)
-                else:
-                    ## PSL score calculation using one hot constraint: the score of selecting each frontier
-                    score_1 = np.clip(1-(1-self.prob_array_obj[i])-(1-obj_confidence_max), 0, 10)
-                    score_2 = 1- np.clip(self.prob_array_obj[i]+(1-obj_confidence_max), -10,1)
-                    scores += score_1 - score_2
+                score_1 = np.clip(1-(1-self.prob_array_obj[i])-(1-obj_confidence_max), 0, 10)
+                score_2 = 1- np.clip(self.prob_array_obj[i]+(1-obj_confidence_max), -10,1)
+                scores += score_1 - score_2
                 
-        if hasattr(self, 'scenegraph') and False:
-            pass
-            for node in self.scenegraph.nodes:
-                xy = np.array(node.object['xy']).reshape(1, 2)
-                distance = np.linalg.norm(xy - frontier_locations_16, axis=1)
-                score = np.tile(np.array(node.score), (num_16_frontiers))
-                score[distance > 1.6] = 0
-                score = score / distance * 20
-                scores += score
-        # for node in range(30):
-        #     # xy = np.array(node.object['xy']).reshape(1, 2)
-        #     # distance = np.linalg.norm(xy - frontier_locations_16, axis=1)
-        #     # score = np.tile(np.array(node['score']), (num_16_frontiers))
-        #     # score[distance > 1.6] = 0
-        #     score = np.random.uniform(low=0.1, high=5, size=(num_16_frontiers,))
-        #     distance = np.random.uniform(low=0.1, high=5, size=(num_16_frontiers,))
-        #     score = score / distance * 20
-        #     scores += score
 
-        # select the frontier with highest score
-        if self.args.PSL_infer != 'optim':
-            if self.args.reasoning == 'both':  # True
-                scores += 2 * distances_16_inverse
-            else:
-                scores += 1 * distances_16_inverse
-            idx_16_max = idx_16[0][np.argmax(scores)]
-            goal = frontier_locations[idx_16_max] - 1  # annotated by someone
-            # goal = frontier_locations_16[idx_16_max] - 1  # added by someone
-            # with open("output/FBE_PSL_oh_gpt_o/frontier_dist.txt", "a") as file_object:
-            #     file_object.write(str(distances[idx_16_max]) + '\n')
+        for node in self.scenegraph.nodes:
+            xy = np.array(node.object['xy']).reshape(1, 2)
+            distance = np.linalg.norm(xy - frontier_locations_16, axis=1)
+            score = np.tile(np.array(node.score), (num_16_frontiers))
+            score[distance > 1.6] = 0
+            score = score / distance * 20
+            scores += score
+
+        if self.args.reasoning == 'both':  # True
+            scores += 2 * distances_16_inverse
         else:
-            data = pandas.DataFrame([[i] for i in range(num_16_frontiers)], columns = list(range(1)))
-            self.psl_model.get_predicate('Choose').add_data(Partition.TARGETS, data)
-            
-            data = pandas.DataFrame([[i, distances_16_inverse[i]] for i in range(num_16_frontiers)], columns = list(range(2)))
-            self.psl_model.get_predicate('ShortDist').add_data(Partition.OBSERVATIONS, data)
-            
-            result = self.psl_model.infer(additional_cli_options = ADDITIONAL_CLI_OPTIONS, psl_config = ADDITIONAL_PSL_OPTIONS)
-            for key, value in result.items():
-                result_dt_frame = value
-            
-            scores = result_dt_frame.loc[:,'truth']
-            idx_16_max = idx_16[0][np.argmax(scores)]
-            goal = frontier_locations[idx_16_max] - 1  # annotated by someone
-            # goal = frontier_locations_16[idx_16_max] - 1  # added by someone
+            scores += 1 * distances_16_inverse
+        idx_16_max = idx_16[0][np.argmax(scores)]
+        goal = frontier_locations[idx_16_max] - 1  # annotated by someone
+        # goal = frontier_locations_16[idx_16_max] - 1  # added by someone
+        # with open("output/FBE_PSL_oh_gpt_o/frontier_dist.txt", "a") as file_object:
+        #     file_object.write(str(distances[idx_16_max]) + '\n')
         self.scores = scores
         return goal
         
@@ -862,9 +738,6 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         return goal_gps
 
     def get_relative_goal_gps(self, observations, goal_gps=None):
-        """
-        return the goal gps in the agent's coordinates
-        """
         if goal_gps is None:
             goal_gps = self.goal_gps
         direction_vector = goal_gps - np.array([observations['gps'][0].item(),observations['gps'][1].item()])
@@ -1181,19 +1054,6 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         # map = map.permute(2, 0, 1)
         return map
 
-    def visualize_scenegraph_map(self, map):
-        if hasattr(self, 'scenegraph'):
-            # for subgraph in self.scenegraph.subgraph:
-            #     x, y = subgraph.center
-            #     map[:, int(y)-1:int(y)+1, int(x)-1:int(x)+1] = 0.3
-            # for frontier in self.frontier_locations:
-            #     y, x = frontier.tolist()
-            #     y = self.map_size - 1 - y
-            #     map[:, int(y), int(x)] = 0.7
-            for node in self.scenegraph.nodes:
-                x, y = node.center
-                map[:, int(y)-1:int(y)+1, int(x)-1:int(x)+1] = 0.3
-        return map
     
     def visualize_obj_goal(self, map):
         agent_state = self.benchmark._env.sim.get_agent_state()
@@ -1268,11 +1128,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             draw.text((x1, y1), label, fill='white')  
         
         rgb = np.array(img)
-        # rgb = np.transpose(rgb, (2, 0, 1))
         return rgb
-        # plt.imshow(img)  
-        # plt.axis('off')
-        # plt.show()  
 
     def draw_frontier_score(self, paper_map_trans, frontier_rgb, unknown_rgb):
         # frontier_map = torch.zeros_like(paper_map_trans)[:, :, 0]
@@ -1345,12 +1201,6 @@ def main():
         os.environ["CHALLENGE_CONFIG_FILE"] = "configs/challenge_objectnav2021.local.rgbd.yaml"
     config_paths = os.environ["CHALLENGE_CONFIG_FILE"]
     config = habitat.get_config(config_paths)
-    # for dir in os.listdir('figures'):
-    #     if os.path.isfile(os.path.join('figures', dir)):
-    #         os.remove(os.path.join('figures', dir))
-    #     else:
-    #         for file in os.listdir(os.path.join('figures', dir)):
-    #             os.remove(os.path.join('figures', dir, file))
     agent = CLIP_LLM_FMMAgent_NonPano(task_config=config, args=args)
 
     if args.evaluation == "local":
