@@ -1,11 +1,10 @@
 import argparse
 import imp
-from multiprocessing.context import ForkContext
+import sys
+sys.path.append('/your/work/directory/')
+# from multiprocessing.context import ForkContext
 import os
 import math
-import numba
-import time
-import random
 import numpy as np
 import skimage
 import torch
@@ -13,16 +12,11 @@ from torchvision.utils import save_image
 import copy
 from PIL import Image, ImageDraw, ImageFont
 import pandas
-from gym.spaces import Box
-from gym.spaces import Dict as SpaceDict
-from gym.spaces import Discrete
-import matplotlib.pyplot as plt
 from matplotlib import colors
 import colorsys
+import cv2
 
 import habitat
-from habitat.config import Config
-from habitat.core.agent import Agent
 from habitat.utils.geometry_utils import (
     quaternion_from_coeff,
     quaternion_rotate_vector,
@@ -31,10 +25,11 @@ from GLIP.maskrcnn_benchmark.engine.predictor_glip import GLIPDemo
 from GLIP.maskrcnn_benchmark.config import cfg as glip_cfg
 from utils_glip import *
 
-from utils_fmm.fmm_planner import FMMPlanner
+from utils_fmm.fmm_planner import FMMPlanner    
 from utils_fmm.mapping import Semantic_Mapping
 import utils_fmm.control_helper as CH
 import utils_fmm.pose_utils as pu
+from utils.image_process import add_text, add_text_list, add_rectangle, add_resized_image, crop_around_point
 
 from pslpython.model import Model as PSLModel
 from pslpython.partition import Partition
@@ -52,7 +47,7 @@ ADDITIONAL_CLI_OPTIONS = [
     # '--postgres'
 ]
 
-class CLIP_LLM_FMMAgent_NonPano(Agent):
+class SG_Nav_Agent():
     """
     New in this version: 
     1. use obj and room reasoning by record object locations and build a room map 
@@ -79,6 +74,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.found_goal_times = 0
         self.threshold_list = {'bathtub': 3, 'bed': 3, 'cabinet': 2, 'chair': 1, 'chest_of_drawers': 3, 'clothes': 2, 'counter': 1, 'cushion': 3, 'fireplace': 3, 'gym_equipment': 2, 'picture': 3, 'plant': 3, 'seating': 0, 'shower': 2, 'sink': 2, 'sofa': 2, 'stool': 2, 'table': 1, 'toilet': 3, 'towel': 2, 'tv_monitor': 0}
         self.found_goal_times_threshold = 3
+        self.distance_threshold = 5
         self.correct_room = False
         self.changing_room = False
         self.changing_room_steps = 0
@@ -95,12 +91,15 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.loop_time = 0
         self.stuck_time = 0
         self.rooms = rooms
-        self.room_captions = rooms_captions
+        self.rooms_captions = rooms_captions
         self.split = (self.args.split_l >= 0)
+        self.metrics = {'distance_to_goal': 0., 'spl': 0., 'softspl': 0.}
 
         ### ------ init glip model ------ ###
         config_file = "GLIP/configs/pretrain/glip_Swin_L.yaml" 
         weight_file = "GLIP/MODEL/glip_large_model.pth"
+        # config_file = "GLIP/configs/pretrain/glip_Swin_T_O365_GoldG.yaml"
+        # weight_file = "GLIP/MODEL/glip_tiny_model_o365_goldg_cc_sbu.pth"
         glip_cfg.local_rank = 0
         glip_cfg.num_gpus = 1
         glip_cfg.merge_from_file(config_file) 
@@ -122,6 +121,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.collision_threshold = 0.08
         self.col_width = 5
         self.selem = skimage.morphology.square(1)
+        self.explanation = ''
         
         ### ----- init maps ----- ###
         self.init_map()
@@ -136,7 +136,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.room_map_module.eval()
         self.room_map_module.set_view_angles(self.camera_horizon)
 
-        self.camera_matrix = self.free_map_module.camera_matrix  # added by someone
+        self.camera_matrix = self.free_map_module.camera_matrix
         
         print('FMM navigate map init finish!!!')
         
@@ -163,9 +163,9 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
 
         ### ----- load scene graph module ----- ###
         self.goal_verification = True
-        self.scenegraph = SceneGraph(agent=self)
+        self.scenegraph = SceneGraph(map_resolution=self.map_resolution, map_size_cm=self.map_size_cm, map_size=self.map_size, camera_matrix=self.camera_matrix)
 
-        self.experiment_name = 'experiment_0'
+        self.experiment_name = 'test'
 
         if self.split:
             self.experiment_name = self.experiment_name + f'/[{self.args.split_l}:{self.args.split_r}]'
@@ -212,7 +212,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         model.add_rule(Rule('2: ShortDist(F) -> Choose(F)^2'))
         model.add_rule(Rule('Choose(+F) = 1 .'))
     
-    def reset(self):
+    def reset(self, obj_goal):
         """
         reset variables for each episodes
         """
@@ -250,7 +250,8 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.history_pose = []
         self.loop_time = 0
         self.stuck_time = 0
-        self.found_goal_times_threshold = self.threshold_list[self.benchmark._env.current_episode.object_category]
+        self.metrics = {'distance_to_goal': 0., 'spl': 0., 'softspl': 0.}
+        self.obj_goal = obj_goal
         ###########
         self.current_obj_predictions = []
         self.obj_locations = [[] for i in range(21)] # length equal to all the objects in reference matrix 
@@ -268,7 +269,12 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.last_location = np.array([0.,0.])
         self.current_stuck_steps = 0
         self.total_stuck_steps = 0
-        self.scenegraph.reset()
+        self.explanation = ''
+        self.text_node = ''
+        self.text_edge = ''
+
+        if hasattr(self, 'scenegraph'):
+            self.scenegraph.reset()
         
         os.system(f'rm -r {self.save_image_dir}')
         
@@ -280,9 +286,8 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         new_labels = self.get_glip_real_label(self.current_obj_predictions) # transfer int labels to string labels
         self.current_obj_predictions.add_field("labels", new_labels)
 
-        observations["rgb_annotated"] = self.draw_bboxes_with_labels(rgb=observations["rgb_annotated"], bboxes=self.current_obj_predictions.bbox.numpy(), labels=self.current_obj_predictions.get_field("labels"), color='pink')
         
-        shortest_distance = 120 # TODO: shortest distance  or most confident?
+        shortest_distance = 120
         shortest_distance_angle = 0
         goal_prediction = copy.deepcopy(self.current_obj_predictions)
         obj_labels = self.current_obj_predictions.get_field("labels")
@@ -291,7 +296,6 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         for j, label in enumerate(obj_labels):
             if self.obj_goal in label:
                 goal_bbox.append(self.current_obj_predictions.bbox[j])
-                observations["rgb_annotated"] = self.draw_bboxes_with_labels(rgb=observations["rgb_annotated"], bboxes=np.expand_dims(self.current_obj_predictions.bbox[j].numpy(), axis=0), labels=[self.obj_goal], color='red')
             elif self.obj_goal == 'gym_equipment' and (label in ['treadmill', 'exercise machine']):
                 goal_bbox.append(self.current_obj_predictions.bbox[j])
         
@@ -333,16 +337,10 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
                     self.found_long_goal = True
                     self.ever_long_goal = True
                 else:
-                    if self.found_goal:  # added by someone
-                        # if self.double_found_goal:
-                        #     self.triple_found_goal = True
-                        # self.double_found_goal = True
-                        self.found_goal_times = self.found_goal_times + 1
-                    goal_gps = self.get_goal_gps(observations, shortest_distance_angle, shortest_distance)
-                    goal_xy = [int((self.map_size_cm/200+self.goal_gps[0])*100/self.resolution), int((self.map_size_cm/200+self.goal_gps[1])*100/self.resolution)]
-                    verification_passed = self.scenegraph.verify_goal(goal_xy)
-                    if verification_passed:
-                        self.found_goal = True
+                    if self.found_goal:
+                        if temp_distance < self.distance_threshold:
+                            self.found_goal_times = self.found_goal_times + 1
+                    self.found_goal = True
                     self.found_long_goal = False
                 
                 ## select the closest goal
@@ -361,25 +359,23 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             if self.args.error_analysis and self.found_goal:
                 if (observations['semantic'][box_shortest[0]:box_shortest[2],box_shortest[1]:box_shortest[3]] == self.goal_mp3d_idx).sum() > min(300, 0.2 * (box_shortest[2]-box_shortest[0])*(box_shortest[3]-box_shortest[1])):
                      self.detect_true = True
-        else:  # added by someone
+        else:
             if self.found_goal:
                 self.found_goal = False
                 self.found_goal_times = 0
                 # self.double_found_goal = False
                 # self.triple_found_goal = False
-            
-                   
+                        
     def act(self, observations):
         """ 
         observations: 
         """ 
-        # if self.total_steps >= 482:  # due to using turning 60 degree action at the beginning. 
-        if self.total_steps >= 500:  # 230 is setted by someone
+        if self.total_steps >= 500:
             return {"action": 0}
         
         self.total_steps += 1
         if self.navigate_steps == 0:
-            self.obj_goal = projection[int(observations["objectgoal"])]
+            # self.obj_goal = projection[int(observations["objectgoal"])]
             self.prob_array_room = self.co_occur_room_mtx[self.goal_idx[self.obj_goal]]
             self.prob_array_obj = self.co_occur_mtx[self.goal_idx[self.obj_goal]]
             ## ADMM PSL optim only 
@@ -405,19 +401,20 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         self.rgb = observations["rgb"][:,:,[2,1,0]]
         observations["rgb_annotated"] = observations["rgb"]
 
-        self.scenegraph.update_observation(observations)
+        if hasattr(self, 'scenegraph'):
+            self.scenegraph.set_agent(self)
+            self.scenegraph.set_navigate_steps(self.navigate_steps)
+            self.scenegraph.set_obj_goal(self.obj_goal)
+            self.scenegraph.set_room_map(self.room_map)
+            self.scenegraph.set_fbe_free_map(self.fbe_free_map)
+            self.scenegraph.set_observations(observations)
+            self.scenegraph.set_full_map(self.full_map)
+            self.scenegraph.set_full_pose(self.full_pose)
+            self.scenegraph.update_scenegraph()
         
         self.update_map(observations)
         self.update_free_map(observations)
         
-        if self.args.visulize and False:  # Falsed by someone
-            input_pose = np.zeros(7)
-            traversible, cur_start, cur_start_o = self.get_traversible(self.full_map.cpu().numpy()[0,0,::-1], input_pose)
-            save_map = copy.deepcopy(torch.from_numpy(traversible))
-            gray_map = torch.stack((save_map, save_map, save_map))
-            save_image((gray_map / gray_map.max()), 'figures/map/img'+str(self.total_steps)+'.png')
-            save_image(torch.from_numpy(observations["rgb"]/255).float().permute(2,0,1), 'figures/rgb/img'+str(self.total_steps)+'.png')
-            save_image(torch.from_numpy(observations["depth"]/5).float().permute(2,0,1).float(), 'figures/dist/d'+str(self.navigate_steps)+'.png')
         # look down twice and look around at first to initialize map
         if self.total_steps == 1:
             # look down
@@ -466,13 +463,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             
         self.last_gps = observations["gps"]
         
-        # if not self.found_goal:
-        if (self.goal_verification and self.found_goal_times < self.found_goal_times_threshold) or (not self.goal_verification and not self.found_goal):
-            ## perform object and room detection if have't found a goal
-            self.detect_objects(observations)
-            if self.total_steps % 2 == 0 and self.args.reasoning in ['both','room']:
-                room_detection_result = self.glip_demo.inference(observations["rgb"][:,:,[2,1,0]], rooms_captions)
-                self.update_room_map(observations, room_detection_result)
+        self.scenegraph.perception()
           
         ### ------ generate action using FMM ------ ###
         ## update pose and map
@@ -496,7 +487,7 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             self.goal_map = np.zeros(self.full_map.shape[-2:])
             self.goal_map[max(0,min(self.map_size - 1,int(self.map_size_cm/10+self.long_goal_temp_gps[1]*100/self.resolution))), max(0,min(self.map_size - 1,int(self.map_size_cm/10+self.long_goal_temp_gps[0]*100/self.resolution)))] = 1
         elif not self.first_fbe: # first FBE process
-            self.goal_loc = self.fbe(traversible, cur_start)  # , annotated by someone
+            self.goal_loc = self.fbe(traversible, cur_start)
             self.not_use_random_goal()
             self.first_fbe = True
             self.goal_map = np.zeros(self.full_map.shape[-2:])
@@ -541,71 +532,6 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
             self.using_random_goal = True
             stg_y, stg_x, number_action = self._plan(traversible, self.goal_map, self.full_pose, cur_start, cur_start_o, self.found_goal)
         
-        # ------------------------------
-        if self.args.visulize:
-            save_map = copy.deepcopy(torch.from_numpy(traversible))
-            gray_map = torch.stack((save_map, save_map, save_map))
-            paper_obstacle_map = copy.deepcopy(gray_map)[:,1:-1,1:-1]
-            gray_map = self.visualize_scenegraph_map(gray_map)
-            gray_map[:, int((self.map_size_cm/100-self.full_pose[1])*100/self.resolution)-2:int((self.map_size_cm/100-self.full_pose[1])*100/self.resolution)+2, int(self.full_pose[0]*100/self.resolution)-2:int(self.full_pose[0]*100/self.resolution)+2] = 0
-            gray_map[0, int((self.map_size_cm/100-self.full_pose[1])*100/self.resolution)-2:int((self.map_size_cm/100-self.full_pose[1])*100/self.resolution)+2, int(self.full_pose[0]*100/self.resolution)-2:int(self.full_pose[0]*100/self.resolution)+2] = 1
-            goal_size = 3 if self.found_goal else 2
-            if not self.found_goal and self.goal_loc is not None:
-                gray_map[:,int(self.map_size_cm/5)-self.goal_loc[0]-goal_size:int(self.map_size_cm/5)-self.goal_loc[0]+goal_size, self.goal_loc[1]-goal_size:self.goal_loc[1]+goal_size] = 0
-                gray_map[1,int(self.map_size_cm/5)-self.goal_loc[0]-goal_size:int(self.map_size_cm/5)-self.goal_loc[0]+goal_size, self.goal_loc[1]-goal_size:self.goal_loc[1]+goal_size] = 1
-            else:
-                gray_map[:, int((self.map_size_cm/200+self.goal_gps[1])*100/self.resolution)-goal_size:int((self.map_size_cm/200+self.goal_gps[1])*100/self.resolution)+goal_size, int((self.map_size_cm/200+self.goal_gps[0])*100/self.resolution)-goal_size:int((self.map_size_cm/200+self.goal_gps[0])*100/self.resolution)+goal_size] = 0
-                gray_map[1, int((self.map_size_cm/200+self.goal_gps[1])*100/self.resolution)-goal_size:int((self.map_size_cm/200+self.goal_gps[1])*100/self.resolution)+goal_size, int((self.map_size_cm/200+self.goal_gps[0])*100/self.resolution)-goal_size:int((self.map_size_cm/200+self.goal_gps[0])*100/self.resolution)+goal_size] = 1
-            # gray_map[:, int(stg_y)-1:int(stg_y)+1, int(stg_x)-1:int(stg_x)+1] = 0
-            # gray_map[2, int(stg_y)-1:int(stg_y)+1, int(stg_x)-1:int(stg_x)+1] = 1
-            free_map = self.fbe_free_map.cpu().numpy()[0,0,::-1].copy() > 0.5
-            
-            paper_map = torch.zeros_like(paper_obstacle_map)
-            paper_map_trans = paper_map.permute(1,2,0)
-            # unknown_rgb = colors.to_rgb('lightcyan')
-            unknown_rgb = colors.to_rgb('#FFFFFF')
-            paper_map_trans[:,:,:] = torch.tensor( unknown_rgb)
-            # free_rgb = colors.to_rgb('floralwhite')
-            free_rgb = colors.to_rgb('#E7E7E7')
-            paper_map_trans[self.fbe_free_map.cpu().numpy()[0,0,::-1]>0.5,:] = torch.tensor( free_rgb).double()
-            frontier_rgb = colors.to_rgb('indianred')
-            selem = skimage.morphology.disk(1)
-            selem = skimage.morphology.disk(4)
-            # free_map[skimage.morphology.binary_dilation(free_map, selem)] = 1
-            # paper_map_trans[(free_map==1)*(paper_map_trans[:,:,0]==torch.tensor(unknown_rgb)[0]).numpy(),:] = torch.tensor(frontier_rgb).double()
-            paper_map_trans = self.draw_frontier_score(paper_map_trans, frontier_rgb, unknown_rgb)
-            # obstacle_rgb = colors.to_rgb('dimgrey')
-            obstacle_rgb = colors.to_rgb('#A2A2A2')
-            paper_map_trans[skimage.morphology.binary_dilation(self.full_map.cpu().numpy()[0,0,::-1]>0.5,skimage.morphology.disk(1)),:] = torch.tensor(obstacle_rgb).double()
-            paper_map_trans = paper_map_trans.permute(2,0,1)
-            # self.paper_map_trans = paper_map_trans
-
-
-
-            # self.visualize_obj_goal(paper_map_trans)
-            self.visualize_agent_and_goal(paper_map_trans)
-            paper_map_trans = paper_map_trans / paper_map_trans.max()
-            rgb = torch.from_numpy(observations["rgb_annotated"] / 255).float().permute(2, 0, 1)
-            text_image = torch.ones(rgb.shape[0], paper_map_trans.shape[1] - rgb.shape[1], rgb.shape[2])
-            metrics = self.benchmark._env.get_metrics()
-            text = [
-                'episode_id: {}'.format(self.benchmark._env.current_episode.episode_id),
-                'episode: {}'.format(self.benchmark._env.current_episode.goals_key),
-                'object_category: {}'.format(self.benchmark._env.current_episode.object_category),
-                'geodesic_distance: {}'.format(self.benchmark._env.current_episode.info['geodesic_distance']),
-                'euclidean_distance: {}'.format(self.benchmark._env.current_episode.info['euclidean_distance']),
-            ]
-            paper_map_trans = self.add_text(paper_map_trans, text)
-            rgb = torch.cat([rgb, text_image], dim=1)
-            self.agent_state_image = torch.cat([paper_map_trans, rgb], dim=2)
-
-            try:
-                pose_dict = json.load(open('figures/pose/pose.json', 'r'))
-            except:
-                pose_dict = {}
-            pose_dict[str(self.navigate_steps)] = {'compass': str(observations['compass']), 'gps': str(observations['gps'])}
-            json.dump(pose_dict, open('figures/pose/pose.json', 'w'))
-            
         observations["pointgoal_with_gps_compass"] = self.get_relative_goal_gps(observations)
 
         ###-----------------------------------###
@@ -641,13 +567,13 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         select a frontier using commonsense and PSL and return a GPS
         """
         fbe_map = torch.zeros_like(self.full_map[0,0])
-        fbe_map[self.fbe_free_map[0,0]>0] = 1  # first free 
+        fbe_map[self.fbe_free_map[0,0]>0] = 1 # first free 
         fbe_map[skimage.morphology.binary_dilation(self.full_map[0,0].cpu().numpy(), skimage.morphology.disk(4))] = 3 # then dialte obstacle
 
         fbe_cp = copy.deepcopy(fbe_map)
         fbe_cpp = copy.deepcopy(fbe_map)
-        fbe_cp[fbe_cp == 0] = 4  # don't know space is 4
-        fbe_cp[fbe_cp < 4] = 0  # free and obstacle
+        fbe_cp[fbe_cp==0] = 4 # don't know space is 4
+        fbe_cp[fbe_cp<4] = 0 # free and obstacle
         selem = skimage.morphology.disk(1)
         fbe_cpp[skimage.morphology.binary_dilation(fbe_cp.cpu().numpy(), selem)] = 0 # don't know space is 0 dialate unknown space
         
@@ -672,57 +598,38 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         distances_16 = distances[idx_16]
         distances_16_inverse = 1 - (np.clip(distances_16,0,11.6)-1.6) / (11.6-1.6)
         frontier_locations_16 = frontier_locations[idx_16]
-        self.frontier_locations = frontier_locations  # added by someone
-        self.frontier_locations_16 = frontier_locations_16  # added by someone
+        self.frontier_locations = frontier_locations
+        self.frontier_locations_16 = frontier_locations_16
         if len(distances_16) == 0:
             return None
         num_16_frontiers = len(idx_16[0])  # 175
-        scores = np.zeros((num_16_frontiers))
-                
-        if self.args.reasoning in ['both', 'room']:
-            for i, loc in enumerate(frontier_locations_16):
-                sub_room_map = self.room_map[0,:,max(0,loc[0]-12):min(self.map_size-1,loc[0]+13), max(0,loc[1]-12):min(self.map_size-1,loc[1]+13)].cpu().numpy() # sub_room_map.shape = [9, 25, 25], select the room map around the frontier
-                whether_near_room = np.max(np.max(sub_room_map, 1),1) # whether_near_room.shape = [9], 1*9 wether the frontier is close to each room
-                score_1 = np.clip(1-(1-self.prob_array_room)-(1-whether_near_room), 0, 10)  # score_1.shape = [9], prob_array_room.shape = [9]
-                score_2 = 1- np.clip(self.prob_array_room+(1-whether_near_room), -10,1)  # score_2.shape = [9]
-                scores[i] = np.sum(score_1) - np.sum(score_2)
-        
-        if self.args.reasoning in ['both', 'obj']:
-            for i in range(21):
-                num_obj = len(self.obj_locations[i])
-                if num_obj <= 0:
-                    continue
-                frontier_location_mtx = np.tile(frontier_locations_16, (num_obj,1,1)) # k*m*2 k: num of objects, m: num of frontiers  (4, 175, 2) = (175, 2)
-                obj_location_mtx = np.array(self.obj_locations[i])[:,1:] # k*2  (4, 2)
-                obj_confidence_mtx = np.tile(np.array(self.obj_locations[i])[:,0],(num_16_frontiers,1)).transpose(1,0) # k*m  (4, 175)
-                obj_location_mtx = np.tile(obj_location_mtx, (num_16_frontiers,1,1)).transpose(1,0,2) # k*m*2  (4, 175, 2)
-                dist_frontier_obj = np.square(frontier_location_mtx - obj_location_mtx)
-                dist_frontier_obj = np.sqrt(np.sum(dist_frontier_obj, axis=2)) / 20 # k*m  (4, 175)
-                near_frontier_obj = dist_frontier_obj < 1.6 # k*m 
-                obj_confidence_mtx[near_frontier_obj==False] = 0 # k*m 
-                obj_confidence_max = np.max(obj_confidence_mtx, axis=0)  # (175)
-                score_1 = np.clip(1-(1-self.prob_array_obj[i])-(1-obj_confidence_max), 0, 10)
-                score_2 = 1- np.clip(self.prob_array_obj[i]+(1-obj_confidence_max), -10,1)
-                scores += score_1 - score_2
+        # scores = np.zeros((num_16_frontiers))
+
+        scores = self.scenegraph.score(frontier_locations_16, num_16_frontiers)
                 
 
-        for node in self.scenegraph.nodes:
-            xy = np.array(node.object['xy']).reshape(1, 2)
-            distance = np.linalg.norm(xy - frontier_locations_16, axis=1)
-            score = np.tile(np.array(node.score), (num_16_frontiers))
-            score[distance > 1.6] = 0
-            score = score / distance * 20
-            scores += score
-
-        if self.args.reasoning == 'both':  # True
-            scores += 2 * distances_16_inverse
+        # select the frontier with highest score
+        if self.args.PSL_infer != 'optim':
+            if self.args.reasoning == 'both':  # True
+                scores += 2 * distances_16_inverse
+            else:
+                scores += 1 * distances_16_inverse
+            idx_16_max = idx_16[0][np.argmax(scores)]
+            goal = frontier_locations[idx_16_max] - 1
         else:
-            scores += 1 * distances_16_inverse
-        idx_16_max = idx_16[0][np.argmax(scores)]
-        goal = frontier_locations[idx_16_max] - 1  # annotated by someone
-        # goal = frontier_locations_16[idx_16_max] - 1  # added by someone
-        # with open("output/FBE_PSL_oh_gpt_o/frontier_dist.txt", "a") as file_object:
-        #     file_object.write(str(distances[idx_16_max]) + '\n')
+            data = pandas.DataFrame([[i] for i in range(num_16_frontiers)], columns = list(range(1)))
+            self.psl_model.get_predicate('Choose').add_data(Partition.TARGETS, data)
+            
+            data = pandas.DataFrame([[i, distances_16_inverse[i]] for i in range(num_16_frontiers)], columns = list(range(2)))
+            self.psl_model.get_predicate('ShortDist').add_data(Partition.OBSERVATIONS, data)
+            
+            result = self.psl_model.infer(additional_cli_options = ADDITIONAL_CLI_OPTIONS, psl_config = ADDITIONAL_PSL_OPTIONS)
+            for key, value in result.items():
+                result_dt_frame = value
+            
+            scores = result_dt_frame.loc[:,'truth']
+            idx_16_max = idx_16[0][np.argmax(scores)]
+            goal = frontier_locations[idx_16_max]
         self.scores = scores
         return goal
         
@@ -788,7 +695,6 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
     
     def update_room_map(self, observations, room_prediction_result):
         new_room_labels = self.get_glip_real_label(room_prediction_result)
-        observations["rgb_annotated"] = self.draw_bboxes_with_labels(rgb=observations["rgb_annotated"], bboxes=room_prediction_result.bbox.numpy(), labels=new_room_labels, color='yellow')
         type_mask = np.zeros((9,self.config.SIMULATOR.DEPTH_SENSOR.HEIGHT, self.config.SIMULATOR.DEPTH_SENSOR.WIDTH))
         bboxs = room_prediction_result.bbox
         score_vec = torch.zeros((9)).to(self.device)
@@ -1019,153 +925,10 @@ class CLIP_LLM_FMMAgent_NonPano(Agent):
         goal[h_goal, w_goal] = 1
         return goal
     
-    def visualize_agent_and_goal(self, map):
-        # map = map.permute(1, 2, 0)
-        def draw_agent(pose, agent_size, color_index, alpha=1):
-            # map[:, int((self.map_size_cm/100-pose[1])*100/self.resolution)-agent_size:int((self.map_size_cm/100-pose[1])*100/self.resolution)+agent_size, int(pose[0]*100/self.resolution)-agent_size:int(pose[0]*100/self.resolution)+agent_size] = 0
-            # map[color_index, int((self.map_size_cm/100-pose[1])*100/self.resolution)-agent_size:int((self.map_size_cm/100-pose[1])*100/self.resolution)+agent_size, int(pose[0]*100/self.resolution)-agent_size:int(pose[0]*100/self.resolution)+agent_size] = 1
-            color_ori = map[:, int((self.map_size_cm/100-pose[1])*100/self.resolution)-agent_size:int((self.map_size_cm/100-pose[1])*100/self.resolution)+agent_size, int(pose[0]*100/self.resolution)-agent_size:int(pose[0]*100/self.resolution)+agent_size]
-            color_new = torch.zeros_like(color_ori)
-            color_new[color_index] = 1
-            color_new = alpha * color_new + (1 - alpha) * color_ori
-            map[:, int((self.map_size_cm/100-pose[1])*100/self.resolution)-agent_size:int((self.map_size_cm/100-pose[1])*100/self.resolution)+agent_size, int(pose[0]*100/self.resolution)-agent_size:int(pose[0]*100/self.resolution)+agent_size] = color_new
-
-        def draw_goal(goal_size, color_index):
-            skimage.morphology.disk(goal_size)
-            if not self.found_goal and self.goal_loc is not None:
-                map[:,int(self.map_size_cm/5)-self.goal_loc[0]-goal_size:int(self.map_size_cm/5)-self.goal_loc[0]+goal_size, self.goal_loc[1]-goal_size:self.goal_loc[1]+goal_size] = 0
-                map[color_index,int(self.map_size_cm/5)-self.goal_loc[0]-goal_size:int(self.map_size_cm/5)-self.goal_loc[0]+goal_size, self.goal_loc[1]-goal_size:self.goal_loc[1]+goal_size] = 1
-            else:
-                map[:, int((self.map_size_cm/200+self.goal_gps[1])*100/self.resolution)-goal_size:int((self.map_size_cm/200+self.goal_gps[1])*100/self.resolution)+goal_size, int((self.map_size_cm/200+self.goal_gps[0])*100/self.resolution)-goal_size:int((self.map_size_cm/200+self.goal_gps[0])*100/self.resolution)+goal_size] = 0
-                map[color_index, int((self.map_size_cm/200+self.goal_gps[1])*100/self.resolution)-goal_size:int((self.map_size_cm/200+self.goal_gps[1])*100/self.resolution)+goal_size, int((self.map_size_cm/200+self.goal_gps[0])*100/self.resolution)-goal_size:int((self.map_size_cm/200+self.goal_gps[0])*100/self.resolution)+goal_size] = 1
-
-        for idx, pose in enumerate(self.history_pose):
-            draw_step_num = 30
-            alpha = max(0, 1 - (len(self.history_pose) - idx) / draw_step_num)
-            agent_size = 1
-            if idx == len(self.history_pose) - 1:
-                agent_size = 2
-            draw_agent(pose=pose, agent_size=agent_size, color_index=0, alpha=alpha)
-        # return map  # added by someone for paper visualization
-        # draw_agent(pose=self.full_pose, agent_size=2, color_index=0)
-        # if self.found_goal:  # annotated by someone for paper visualization
-        #     draw_goal(goal_size=4, color_index=0)
-        draw_goal(goal_size=2, color_index=1)
-        # map = map.permute(2, 0, 1)
-        return map
-
-    
-    def visualize_obj_goal(self, map):
-        agent_state = self.benchmark._env.sim.get_agent_state()
-
-        origin = np.array(self.benchmark._env.current_episode.start_position, dtype=np.float32)
-        rotation_world_start = quaternion_from_coeff(self.benchmark._env.current_episode.start_rotation)
-
-        agent_position = agent_state.position
-        goal_position_list = [goal.position for goal in self.benchmark._env.current_episode.goals]
-
-        agent_position = quaternion_rotate_vector(rotation_world_start.inverse(), agent_position - origin)
-        goal_position_list = [quaternion_rotate_vector(rotation_world_start.inverse(), goal_position - origin) for goal_position in goal_position_list]
-
-        np.array([-agent_position[2], agent_position[0]], dtype=np.float32)
-        goal_position_list = [np.array([-goal_position[2], goal_position[0]], dtype=np.float32) for goal_position in goal_position_list]
-
-        goal_position_list = [[self.map_size_cm / 100.0 / 2.0 + goal_position[0], self.map_size_cm / 100.0 / 2.0 - goal_position[1]] for goal_position in goal_position_list]
-
-        for goal_position in goal_position_list:
-            if 0 <= int((self.map_size_cm/100-goal_position[1])*100/self.resolution) < map.shape[1] and 0 <= int(goal_position[0]*100/self.resolution) < map.shape[2]:
-                map[:, int((self.map_size_cm/100-goal_position[1])*100/self.resolution)-2:int((self.map_size_cm/100-goal_position[1])*100/self.resolution)+2, int(goal_position[0]*100/self.resolution)-2:int(goal_position[0]*100/self.resolution)+2] = 0
-                map[2, int((self.map_size_cm/100-goal_position[1])*100/self.resolution)-2:int((self.map_size_cm/100-goal_position[1])*100/self.resolution)+2, int(goal_position[0]*100/self.resolution)-2:int(goal_position[0]*100/self.resolution)+2] = 1
-                # map[:, int((self.map_size_cm/100-goal_position[1])*100/self.resolution), int(goal_position[0]*100/self.resolution)] = 0
-                # map[2, int((self.map_size_cm/100-goal_position[1])*100/self.resolution), int(goal_position[0]*100/self.resolution)] = 1
-
-        return map
-
-    def add_text(self, image: torch.Tensor, text_list: list, coordinate=(5, 5)):
-        image = image.permute(1, 2, 0)
-        image = (image * 255).byte().numpy()
-        image = Image.fromarray(image)
-        draw = ImageDraw.Draw(image)
-        # for i, t in enumerate(text):
-        #     # font = ImageFont.truetype('arial.ttf', 36)
-        #     text_position = (0, 40 * i)
-        #     # text_color = (0, 0, 0)
-        #     draw.text(text_position, t, fill='black')
-        # font = ImageFont.truetype('arial.ttf', 36)
-        text = ''
-        for t in text_list:
-            text = text + t + '\n'
-        draw.text(coordinate, text, fill='black')
-        image = np.array(image)
-        image = torch.tensor(image)
-        image = image / 255
-        image = image.permute(2, 0, 1)
-        return image
-    
-    def draw_bboxes_with_labels(self, rgb, bboxes, labels, color='red'):  
-        # img = Image.open(image_path)  
-        # rgb = np.transpose(rgb, (1, 2, 0))
-        img = Image.fromarray(rgb)
-        draw = ImageDraw.Draw(img)  
-        
-        for bbox, label in zip(bboxes, labels):  
-            x1, y1, x2, y2 = bbox  
-            
-            draw.rectangle([x1, y1, x2, y2], outline=color, width=2)  
-            
-            # text_width, text_height = draw.textsize(label)  
-            font = ImageFont.load_default()  
-            
-            bbox = draw.textbbox((0, 0), label, font=font)  
-            left, upper, right, lower = bbox  
-            
-            text_width = right - left  
-            text_height = lower - upper  
-            # margin = 10  
-            # draw.rectangle([x1, y1 - text_height - margin, x1 + text_width, y1 - margin], fill=color)  
-            # draw.text((x1, y1 - text_height - margin), label, fill='white')  
-            draw.rectangle([x1, y1, x1 + text_width, y1 + text_height], fill=color)  
-            draw.text((x1, y1), label, fill='white')  
-        
-        rgb = np.array(img)
-        return rgb
-
-    def draw_frontier_score(self, paper_map_trans, frontier_rgb, unknown_rgb):
-        # frontier_map = torch.zeros_like(paper_map_trans)[:, :, 0]
-        # color_map = torch.zeros_like(paper_map_trans)
-        index_map = torch.zeros_like(paper_map_trans)[:, :, 0]
-        scores = torch.tensor(self.scores)
-        value, indices = torch.sort(scores)
-        scores = scores[indices]
-        frontier_locations_16 = self.frontier_locations_16[indices]
-        wight_rgb = colors.to_rgb('white')
-        wight_rgb = torch.tensor(wight_rgb).double()
-        frontier_rgb = torch.tensor(frontier_rgb).double()
-        thickness = 2
-        selem = skimage.morphology.disk(thickness)
-        def hsv_to_rgb(h, s, v):  
-            h = h / 360.0  
-            r, g, b = colorsys.hsv_to_rgb(h, s, v)  
-            # r, g, b = int(r * 255), int(g * 255), int(b * 255)  
-            return r, g, b  
-        for i, frontier in enumerate(frontier_locations_16):
-            # frontier[0] = frontier[0] + 10
-            frontier[0] = self.map_size - 1 - frontier[0]
-            # frontier_map[frontier[0], frontier[1]] = 1
-            # v = 0.5 - 0.5 * i / len(frontier_locations_16)
-            # combine_rgb = v * wight_rgb + (1 - v) * frontier_rgb
-            h = 240 * (1 - i / len(frontier_locations_16))
-            r, g, b = hsv_to_rgb(h, 1, 1)  
-            combine_rgb = torch.tensor([r, g, b]).double()
-            # color_map[color_map[0] - 4:color_map[0] + 4, color_map[1] - 4:color_map[1] + 4, :] = torch.tensor(combine_rgb).double()
-            # index_map[color_map[0] - 4:color_map[0] + 4, color_map[1] - 4:color_map[1] + 4, :] = 1
-            index_map = torch.zeros_like(paper_map_trans)[:, :, 0].numpy()
-            index_map[frontier[0] - thickness:frontier[0] + thickness + 1, frontier[1] - thickness:frontier[1] + thickness + 1] = selem
-            paper_map_trans[(index_map==1)*(paper_map_trans[:,:,0]==torch.tensor(unknown_rgb)[0]).numpy(), :] = combine_rgb
-        # selem = skimage.morphology.disk(4)
-        # frontier_map[skimage.morphology.binary_dilation(frontier_map, selem)] = 1
-        # paper_map_trans[(frontier_map==1)*(paper_map_trans[:,:,0]==torch.tensor(unknown_rgb)[0]).numpy(),:] = color_map[(frontier_map==1)*(paper_map_trans[:,:,0]==torch.tensor(unknown_rgb)[0]).numpy(),:]
-        return paper_map_trans
+    def update_metrics(self, metrics):
+        self.metrics['distance_to_goal'] = metrics['distance_to_goal']
+        self.metrics['spl'] = metrics['spl']
+        self.metrics['softspl'] = metrics['softspl']
 
 
 def main():
@@ -1201,7 +964,7 @@ def main():
         os.environ["CHALLENGE_CONFIG_FILE"] = "configs/challenge_objectnav2021.local.rgbd.yaml"
     config_paths = os.environ["CHALLENGE_CONFIG_FILE"]
     config = habitat.get_config(config_paths)
-    agent = CLIP_LLM_FMMAgent_NonPano(task_config=config, args=args)
+    agent = SG_Nav_Agent(task_config=config, args=args)
 
     if args.evaluation == "local":
         challenge = habitat.Challenge(eval_remote=False, split_l=args.split_l, split_r=args.split_r)

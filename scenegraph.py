@@ -1,30 +1,33 @@
 import os
 import sys
+class SceneGraph():
+    def __init__(self):
+        pass
+sys.path.append('/your/path/to/Grounded-Segment-Anything/')
 sys.path.append('/your/path/to/concept-graphs/conceptgraph')
+sys.path.append('/your/work/directory/')
 import cv2
 import numpy as np
 import torch
-import open_clip
-import hydra
+# import hydra
 import math
-from tqdm import tqdm
 import supervision as sv
-import time
-import json
 import random
 from PIL import Image
+from sklearn.cluster import DBSCAN  
 from collections import Counter 
-from openai import OpenAI
 from segment_anything import sam_model_registry, SamPredictor, SamAutomaticMaskGenerator
 
 import dataclasses
 import omegaconf
-import rich
+# import rich
+from grounded_sam_demo import load_image, load_model, get_grounding_output
+import GroundingDINO.groundingdino.datasets.transforms as T
 from omegaconf import DictConfig
 from pathlib import PosixPath
 from pathlib import Path
 from supervision.draw.color import Color, ColorPalette
-from conceptgraph.llava.llava_model import LLaVA
+# from conceptgraph.llava.llava_model import LLaVA
 # from conceptgraph.utils.general_utils import to_tensor, to_numpy, Timer
 from conceptgraph.slam.slam_classes import MapObjectList, DetectionList
 from conceptgraph.slam.utils import (
@@ -41,15 +44,58 @@ from conceptgraph.slam.mapping import (
     aggregate_similarities,
     merge_detections_to_objects
 )
+from model_server.llm_client import LLM_Client
+from model_server.vlm_client import VLM_Client
+
+
+ADDITIONAL_PSL_OPTIONS = {
+    'log4j.threshold': 'INFO'
+}
+
+ADDITIONAL_CLI_OPTIONS = [
+    # '--postgres'
+]
 
 
 class RoomNode():
-    def __init__(self, room_caption):
-        self.room_caption = room_caption
+    def __init__(self, caption):
+        self.caption = caption
+        self.exploration_level = 0
         self.nodes = set()
+        self.group_nodes = []
 
 
-class Node():
+class GroupNode():
+    def __init__(self, caption=''):
+        self.caption = caption
+        self.exploration_level = 0
+        self.corr_score = 0
+        self.center = None
+        self.center_node = None
+        self.nodes = []
+        self.edges = set()
+    
+    def __lt__(self, other):
+        return self.corr_score < other.corr_score
+    
+    def get_graph(self):
+        self.center = np.array([node.center for node in self.nodes]).mean(axis=0)
+        min_distance = np.inf
+        for node in self.nodes:
+            distance = np.linalg.norm(np.array(node.center) - np.array(self.center))
+            if distance < min_distance:
+                min_distance = distance
+                self.center_node = node
+            self.edges.update(node.edges)
+        self.caption = self.graph_to_text(self.nodes, self.edges)
+
+    def graph_to_text(self, nodes, edges):
+        nodes_text = ', '.join([node.caption for node in nodes])
+        edges_text = ', '.join([f"{edge.node1.caption} {edge.relation} {edge.node2.caption}" for edge in edges])
+        return f"Nodes: {nodes_text}. Edges: {edges_text}."
+
+
+class ObjectNode():
     def __init__(self):
         self.is_new_node = True
         self.caption = None
@@ -57,6 +103,7 @@ class Node():
         self.reason = None
         self.center = None
         self.room_node = None
+        self.exploration_level = 0
         self.distance = 2
         self.score = 0.5
         self.edges = set()
@@ -70,7 +117,7 @@ class Node():
     def remove_edge(self, edge):
         self.edges.discard(edge)
     
-    def update_caption(self, new_caption):
+    def set_caption(self, new_caption):
         for edge in list(self.edges):
             edge.delete()
         self.is_new_node = True
@@ -78,7 +125,15 @@ class Node():
         self.reason = None
         self.distance = 2
         self.score = 0.5
+        self.exploration_level = 0
         self.edges.clear()
+    
+    def set_object(self, object):
+        self.object = object
+        self.object['node'] = self
+    
+    def set_center(self, center):
+        self.center = center
 
 
 class Edge():
@@ -89,96 +144,151 @@ class Edge():
         node2.add_edge(self)
         self.relation = None
 
+    def set_relation(self, relation):
+        self.relation = relation
+
     def delete(self):
         self.node1.remove_edge(self)
         self.node2.remove_edge(self)
 
     def text(self):
-        text = [self.node1.caption, self.node2.caption, self.relation]
-        return text
-
-
-class SubGraph():
-    def __init__(self, center_node):
-        self.center_node = center_node
-        self.edges = self.center_node.edges
-        self.center = self.center_node.center
-        self.nodes = set()
-        for edge in self.edges:
-            self.nodes.add(edge.node1)
-            self.nodes.add(edge.node2)
-
-    def get_subgraph_2_text(self):
-        text = ''
-        edges = set()
-        for node in self.nodes:
-            text = text + node.caption + '/'
-            edges.update(node.edges)
-        text = text[:-1] + '\n'
-        for edge in edges:
-            text = text + edge.relation + '/'
-        text = text[:-1]
+        text = '({}, {}, {})'.format(self.node1.caption, self.node2.caption, self.relation)
         return text
 
 
 class SceneGraph():
-    def __init__(self, agent, is_navigation=True, llm_name='GPT') -> None:
-        self.agent = agent
+    def __init__(self, map_resolution, map_size_cm, map_size, camera_matrix, is_navigation=True) -> None:
+        self.map_resolution = map_resolution
+        self.map_size_cm = map_size_cm
+        self.map_size = map_size
+        full_w, full_h = self.map_size, self.map_size
+        self.full_w = full_w
+        self.full_h = full_h
+        self.visited = torch.zeros(full_w, full_h).float().cpu().numpy()
+        self.num_of_goal = torch.zeros(full_w, full_h).int()
+        self.camera_matrix = camera_matrix
         self.GSA_PATH = os.environ["GSA_PATH"]
         self.SAM_ENCODER_VERSION = "vit_h"
         self.SAM_CHECKPOINT_PATH = os.path.join(self.GSA_PATH, "./sam_vit_h_4b8939.pth")
         self.sam_variant = 'sam'
+        self.sam_variant = 'groundedsam'
         self.device = 'cuda'
         self.classes = ['item']
         self.BG_CLASSES = ["wall", "floor", "ceiling"]
+        self.rooms = ['bedroom', 'living room', 'bathroom', 'kitchen', 'dining room', 'office room', 'gym', 'lounge', 'laundry room']
         self.objects = MapObjectList(device=self.device)
         self.objects = MapObjectList(device=self.device)
-        self.nodes = set()
-        self.subgraphs = set()
-        self.room_nodes = self.init_room_nodes()
+        self.nodes = []
+        self.edge_text = ''
+        self.edge_list = []
+        self.group_nodes = []
+        self.init_room_nodes()
+        self.reason_visualization = ''
         self.is_navigation = is_navigation
-        self.llm_name = llm_name
-        # self.cfg = get_cfg()
-        # self.cfg = self.process_cfg(self.cfg)
-        self.cfg = self.get_cfg()
+        self.reasoning = 'both'
+        self.PSL_infer = 'one_hot'
+        self.set_cfg()
         
+        self.groundingdino_config_file = '/home/user001/yh/Grounded-Segment-Anything/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py'
+        self.groundingdino_checkpoint = '/home/user001/yh/Grounded-Segment-Anything/groundingdino_swint_ogc.pth'
+        self.sam_version = 'vit_h'
+        self.sam_checkpoint = '/home/user001/yh/Grounded-Segment-Anything/sam_vit_h_4b8939.pth'
         self.segment2d_results = []
         self.max_detections_per_object = 10
-        self.reason = ''
-        self.prompt_llava = '''
-        '''
-        self.prompt_gpt = '''
-        '''
-        self.prompt_gpt = '''
-        '''
+        self.threshold_list = {'bathtub': 3, 'bed': 3, 'cabinet': 2, 'chair': 1, 'chest_of_drawers': 3, 'clothes': 2, 'counter': 1, 'cushion': 3, 'fireplace': 3, 'gym_equipment': 2, 'picture': 3, 'plant': 3, 'seating': 0, 'shower': 2, 'sink': 2, 'sofa': 2, 'stool': 2, 'table': 1, 'toilet': 3, 'towel': 2, 'tv_monitor': 0}
+        self.found_goal_times_threshold = 1
+        self.N_max = 10
+        self.node_space = 'table. tv. chair. cabinet. sofa. bed. windows. kitchen. bedroom. living room. mirror. plant. curtain. painting. picture'
         self.prompt_edge_proposal = '''
+Provide the most possible single spatial relationship for each of the following object pairs. Answer with only one relationship per pair, and separate each answer with a newline character.
+Examples:
+Input:
+Object pair(s):
+(cabinet, chair)
+Output:
+next to
+Input:
+Object pair(s):
+(table, lamp)
+(bed, nightstand)
+Output:
+on
+next to
+Object pair(s):
         '''
-        self.prompt_discriminate_relation = '''
-        '''
-        self.prompt_score_subgraph = '''
-        '''
+        self.prompt_discriminate_relation = 'In the image, do {} and {} satisfy the relationship of {}? Answer "yes" or "no".'
+        self.prompt_room_predict = 'Which room is the most likely to have the [{}] in: [{}]. Only answer the room.'
+        self.prompt_graph_corr_0 = 'What is the probability of A and B appearing together. [A:{}], [B:{}]. Even if you do not have enough information, you have to answer with a value from 0 to 1 anyway. Answer only the value of probability and do not answer any other text.'
+        self.prompt_graph_corr_1 = 'What else do you need to know to determine the probability of A and B appearing together? [A:{}], [B:{}]. Please output a short question (output only one sentence with no additional text).'
+        self.prompt_graph_corr_2 = 'Here is the objects and relationships near A: [{}] You answer the following question with a short sentence based on this information. Question: {}'
+        self.prompt_graph_corr_3 = 'The probability of A and B appearing together is about {}. Based on the dialog: [{}], re-determine the probability of A and B appearing together. A:[{}], B:[{}]. Even if you do not have enough information, you have to answer with a value from 0 to 1 anyway. Answer only the value of probability and do not answer any other text.'
         self.mask_generator = self.get_sam_mask_generator(self.sam_variant, self.device)
-        self.clip_model, _, self.clip_preprocess = open_clip.create_model_and_transforms(
-            "ViT-H-14", "laion2b_s32b_b79k"  # annotated by someone
-        )
-        self.clip_model = self.clip_model.to(self.device)
-        self.clip_tokenizer = open_clip.get_tokenizer("ViT-H-14")
-        self.chat = LLaVA('liuhaotian/llava-v1.5-7b')
+        self.llm = LLM_Client()
+        self.vlm = VLM_Client()
 
-    def init_room_nodes(self):
-        room_nodes = []
-        for room_caption in self.agent.rooms:
-            room_node = RoomNode(room_caption)
-            room_nodes.append(room_node)
-        return room_nodes
-
-    def get_cfg(self):
+    def set_cfg(self):
         cfg = {'dataset_root': PosixPath('/your/path/to/Replica'), 'dataset_config': PosixPath('/your/path/to/concept-graphs/conceptgraph/dataset/dataconfigs/replica/replica.yaml'), 'scene_id': 'room0', 'start': 0, 'end': -1, 'stride': 5, 'image_height': 680, 'image_width': 1200, 'gsa_variant': 'none', 'detection_folder_name': 'gsa_detections_${gsa_variant}', 'det_vis_folder_name': 'gsa_vis_${gsa_variant}', 'color_file_name': 'gsa_classes_${gsa_variant}', 'device': 'cuda', 'use_iou': True, 'spatial_sim_type': 'overlap', 'phys_bias': 0.0, 'match_method': 'sim_sum', 'semantic_threshold': 0.5, 'physical_threshold': 0.5, 'sim_threshold': 1.2, 'use_contain_number': False, 'contain_area_thresh': 0.95, 'contain_mismatch_penalty': 0.5, 'mask_area_threshold': 25, 'mask_conf_threshold': 0.95, 'max_bbox_area_ratio': 0.5, 'skip_bg': True, 'min_points_threshold': 16, 'downsample_voxel_size': 0.025, 'dbscan_remove_noise': True, 'dbscan_eps': 0.1, 'dbscan_min_points': 10, 'obj_min_points': 0, 'obj_min_detections': 3, 'merge_overlap_thresh': 0.7, 'merge_visual_sim_thresh': 0.8, 'merge_text_sim_thresh': 0.8, 'denoise_interval': 20, 'filter_interval': -1, 'merge_interval': 20, 'save_pcd': True, 'save_suffix': 'overlap_maskconf0.95_simsum1.2_dbscan.1_merge20_masksub', 'vis_render': False, 'debug_render': False, 'class_agnostic': True, 'save_objects_all_frames': True, 'render_camera_path': 'replica_room0.json', 'max_num_points': 512}
         cfg = DictConfig(cfg)
         if self.is_navigation:
             cfg.sim_threshold = 0.8
             cfg.sim_threshold_spatial = 0.01
-        return cfg
+        self.cfg = cfg
+
+    def set_agent(self, agent):
+        self.agent = agent
+
+    def set_obj_goal(self, obj_goal):
+        self.obj_goal = obj_goal
+
+    def set_navigate_steps(self, navigate_steps):
+        self.navigate_steps = navigate_steps
+
+    def set_room_map(self, room_map):
+        self.room_map = room_map
+
+    def set_fbe_free_map(self, fbe_free_map):
+        self.fbe_free_map = fbe_free_map
+    
+    def set_observations(self, observations):
+        self.observations = observations
+        self.image_rgb = observations['rgb'].copy()
+        self.image_depth = observations['depth'].copy()
+        self.pose_matrix = self.get_pose_matrix()
+
+    def set_frontier_map(self, frontier_map):
+        self.frontier_map = frontier_map
+
+    def set_full_map(self, full_map):
+        self.full_map = full_map
+
+    def set_fbe_free_map(self, fbe_free_map):
+        self.fbe_free_map = fbe_free_map
+
+    def set_full_pose(self, full_pose):
+        self.full_pose = full_pose
+
+    def get_nodes(self):
+        return self.nodes
+    
+    def get_edges(self):
+        edges = set()
+        for node in self.nodes:
+            edges.update(node.edges)
+        edges = list(edges)
+        return edges
+
+    def get_seg_xyxy(self):
+        return self.seg_xyxy
+
+    def get_seg_caption(self):
+        return self.seg_caption
+
+    def init_room_nodes(self):
+        room_nodes = []
+        for caption in self.rooms:
+            room_node = RoomNode(caption)
+            room_nodes.append(room_node)
+        self.room_nodes = room_nodes
 
     def get_sam_mask_generator(self, variant:str, device) -> SamAutomaticMaskGenerator:
         if variant == "sam":
@@ -196,6 +306,15 @@ class SceneGraph():
             return mask_generator
         elif variant == "fastsam":
             raise NotImplementedError
+            # from ultralytics import YOLO
+            # from FastSAM.tools import *
+            # FASTSAM_CHECKPOINT_PATH = os.path.join(GSA_PATH, "./EfficientSAM/FastSAM-x.pt")
+            # model = YOLO(args.model_path)
+            # return model
+        elif variant == "groundedsam":
+            model = load_model(self.groundingdino_config_file, self.groundingdino_checkpoint, device=device)
+            predictor = SamPredictor(sam_model_registry[self.sam_version](checkpoint=self.sam_checkpoint).to(device))
+            return model, predictor
         else:
             raise NotImplementedError
     
@@ -215,18 +334,18 @@ class SceneGraph():
             conf: (N,)
         '''
         if variant == "sam":
-            results = model.generate(image)
+            results = model.generate(image)  # type(results) == list
             mask = []
             xyxy = []
             conf = []
-            for r in results:
-                mask.append(r["segmentation"])
-                r_xyxy = r["bbox"].copy()
+            for r in results:  # type(r) == dict
+                mask.append(r["segmentation"])  # type(r["segmentation"]) == np.ndarray, r["segmentation"] == [480, 640]
+                r_xyxy = r["bbox"].copy()  # type(r["bbox"]) == list, [x, y, h, w]
                 # Convert from xyhw format to xyxy format
                 r_xyxy[2] += r_xyxy[0]
                 r_xyxy[3] += r_xyxy[1]
                 xyxy.append(r_xyxy)
-                conf.append(r["predicted_iou"])
+                conf.append(r["predicted_iou"])  # type(r["predicted_iou"]) == float
             mask = np.array(mask)
             xyxy = np.array(xyxy)
             conf = np.array(conf)
@@ -243,6 +362,40 @@ class SceneGraph():
                 max_det=100,
             )
             raise NotImplementedError
+        elif variant == "groundedsam":
+            groundingdino = model[0]
+            sam_predictor = model[1]
+            transform = T.Compose(
+                [
+                    T.RandomResize([800], max_size=1333),
+                    T.ToTensor(),
+                    T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+                ]
+            )
+            image_resized, _ = transform(Image.fromarray(image), None)  # 3, h, w
+            boxes_filt, caption = get_grounding_output(groundingdino, image_resized, caption=self.node_space, box_threshold=0.3, text_threshold=0.25, with_logits=False, device=self.device)
+            if len(caption) == 0:
+                return None, None, None, None
+            sam_predictor.set_image(image)
+
+            # size = image_pil.size
+            H, W = image.shape[0], image.shape[1]
+            for i in range(boxes_filt.size(0)):
+                boxes_filt[i] = boxes_filt[i] * torch.Tensor([W, H, W, H])
+                boxes_filt[i][:2] -= boxes_filt[i][2:] / 2
+                boxes_filt[i][2:] += boxes_filt[i][:2]
+
+            boxes_filt = boxes_filt.cpu()
+            transformed_boxes = sam_predictor.transform.apply_boxes_torch(boxes_filt, image.shape[:2]).to(self.device)
+
+            mask, conf, _ = sam_predictor.predict_torch(
+                point_coords = None,
+                point_labels = None,
+                boxes = transformed_boxes.to(self.device),
+                multimask_output = False,
+            )
+            mask, xyxy, conf = mask.squeeze(1).cpu().numpy(), boxes_filt.squeeze(1).numpy(), conf.squeeze(1).cpu().numpy()
+            return mask, xyxy, conf, caption
         else:
             raise NotImplementedError
 
@@ -251,6 +404,7 @@ class SceneGraph():
         
         image = Image.fromarray(image)
         
+        # padding = args.clip_padding  # Adjust the padding amount as needed
         padding = 20  # Adjust the padding amount as needed
         
         image_crops = []
@@ -278,19 +432,15 @@ class SceneGraph():
             cropped_image = image.crop((x_min, y_min, x_max, y_max))
             
             # Get the preprocessed image for clip from the crop 
-            print('            encode_image...')
             preprocessed_image = clip_preprocess(cropped_image).unsqueeze(0).to("cuda")
 
             crop_feat = clip_model.encode_image(preprocessed_image)
             crop_feat /= crop_feat.norm(dim=-1, keepdim=True)
-            self.clear_line()
             
-            print('            encode_text...')
             class_id = detections.class_id[idx]
             tokenized_text = clip_tokenizer([classes[class_id]]).to("cuda")
             text_feat = clip_model.encode_text(tokenized_text)
             text_feat /= text_feat.norm(dim=-1, keepdim=True)
-            self.clear_line()
             
             crop_feat = crop_feat.cpu().numpy()
             text_feat = text_feat.cpu().numpy()
@@ -394,10 +544,10 @@ class SceneGraph():
 
         return image_crop, mask_crop
     
-    def get_pose_matrix(self, observations, map_size_cm):
-        x = map_size_cm / 100.0 / 2.0 + observations['gps'][0]
-        y = map_size_cm / 100.0 / 2.0 - observations['gps'][1]
-        t = (observations['compass'] - np.pi / 2)[0] # input degrees and meters
+    def get_pose_matrix(self):
+        x = self.map_size_cm / 100.0 / 2.0 + self.observations['gps'][0]
+        y = self.map_size_cm / 100.0 / 2.0 - self.observations['gps'][1]
+        t = (self.observations['compass'] - np.pi / 2)[0] # input degrees and meters
         pose_matrix = np.array([
             [np.cos(t), -np.sin(t), 0, x],
             [np.sin(t), np.cos(t), 0, y],
@@ -406,70 +556,61 @@ class SceneGraph():
         ])
         return pose_matrix
 
-    def segment2d(self, image_rgb):
-        print('    segement2d...')
-        print('        sam_segmentation...')
-        mask, xyxy, conf = self.get_sam_segmentation_dense(
-            self.sam_variant, self.mask_generator, image_rgb)
-        self.clear_line()
-        detections = sv.Detections(
-            xyxy=xyxy,
-            confidence=conf,
-            class_id=np.zeros_like(conf).astype(int),
-            mask=mask,
-        )
-        with torch.no_grad():
-            print('        clip_feature...')
-            image_crops, image_feats, text_feats = self.compute_clip_features(
-                image_rgb, detections, self.clip_model, self.clip_preprocess, self.clip_tokenizer, self.classes, self.device)
-            self.clear_line()
-        image_appear_efficiency = [''] * len(image_crops)
-        self.segment2d_results.append({
-            "xyxy": detections.xyxy,
-            "confidence": detections.confidence,
-            "class_id": detections.class_id,
-            "mask": detections.mask,
-            "classes": self.classes,
-            "image_crops": image_crops,
-            "image_feats": image_feats,
-            "text_feats": text_feats,
-            "image_appear_efficiency": image_appear_efficiency,
-            "image_rgb": image_rgb
-        })
-        self.clear_line()
+    def segment2d(self):
+        if self.sam_variant == 'sam' or self.sam_variant == 'groundedsam':
+            with torch.no_grad():
+                mask, xyxy, conf, caption = self.get_sam_segmentation_dense(self.sam_variant, self.mask_generator, self.image_rgb)
+                self.seg_xyxy = xyxy
+                self.seg_caption = caption
+            if caption is None:
+                return
+            detections = sv.Detections(
+                xyxy=xyxy,
+                confidence=conf,
+                class_id=np.zeros_like(conf).astype(int),
+                mask=mask,
+            )
+            # with torch.no_grad():
+            #     image_crops, image_feats, text_feats = self.compute_clip_features(image_rgb, detections, self.clip_model, self.clip_preprocess, self.clip_tokenizer, self.classes, self.device)
+            # image_appear_efficiency = [''] * len(image_crops)
+            image_appear_efficiency = [''] * len(mask)
+            self.segment2d_results.append({
+                "xyxy": detections.xyxy,
+                "confidence": detections.confidence,
+                "class_id": detections.class_id,
+                "mask": detections.mask,
+                "classes": self.classes,
+                # "image_crops": image_crops,
+                # "image_feats": image_feats,
+                # "text_feats": text_feats,
+                "image_appear_efficiency": image_appear_efficiency,
+                "image_rgb": self.image_rgb,
+                "caption": caption,
+            })
 
-
-    def mapping3d(self, image_rgb, depth_array, cam_K, pose):
-        print('    mapping3d...')
+    def mapping3d(self):
+        depth_array = self.image_depth
         depth_array = depth_array[..., 0]
-
-        gobs = None # stands for grounded SAM observations
-
         gobs = self.segment2d_results[-1]
-        
-        unt_pose = pose
-        
-        adjusted_pose = unt_pose
+        cam_K = self.camera_matrix
             
         idx = len(self.segment2d_results) - 1
 
         fg_detection_list, bg_detection_list = gobs_to_detection_list(
             cfg = self.cfg,
-            image = image_rgb,
+            image = self.image_rgb,
             depth_array = depth_array,
             cam_K = cam_K,
             idx = idx,
             gobs = gobs,
-            trans_pose = adjusted_pose,
+            trans_pose = self.pose_matrix,
             class_names = self.classes,
             BG_CLASSES = self.BG_CLASSES,
             is_navigation = self.is_navigation
             # color_path = color_path,
         )
         
-            
         if len(fg_detection_list) == 0:
-            self.clear_line()
             return
             
         if len(self.objects) == 0:
@@ -479,134 +620,69 @@ class SceneGraph():
 
             # Skip the similarity computation 
             self.objects_post = filter_objects(self.cfg, self.objects)
-            self.clear_line()
             return
                 
-        print('        compute_spatial_similarities...')
         spatial_sim = compute_spatial_similarities(self.cfg, fg_detection_list, self.objects)
-        self.clear_line()
-        print('        compute_visual_similarities...')
-        visual_sim = compute_visual_similarities(self.cfg, fg_detection_list, self.objects)
-        self.clear_line()
-        print('        aggregate_similarities...')
-        agg_sim = aggregate_similarities(self.cfg, spatial_sim, visual_sim)
-        self.clear_line()
+        # visual_sim = compute_visual_similarities(self.cfg, fg_detection_list, self.objects)
+        # agg_sim = aggregate_similarities(self.cfg, spatial_sim, visual_sim)
         
-        agg_sim[agg_sim < self.cfg.sim_threshold] = float('-inf')
+        # Threshold sims according to cfg. Set to negative infinity if below threshold
+        # agg_sim[agg_sim < self.cfg.sim_threshold] = float('-inf')
         spatial_sim[spatial_sim < self.cfg.sim_threshold_spatial] = float('-inf')
         
+        # self.objects = merge_detections_to_objects(self.cfg, fg_detection_list, self.objects, agg_sim)
         self.objects = merge_detections_to_objects(self.cfg, fg_detection_list, self.objects, spatial_sim)
-        
         self.objects_post = filter_objects(self.cfg, self.objects)
-        self.clear_line()
-            
             
     def get_caption(self):
-        print('    get_caption...')
-        llava_time = 0
-        for idx, object in enumerate(self.objects_post):
-            conf = object["conf"]
-            conf = np.array(conf)
-            idx_most_conf = np.argsort(conf)[::-1]
-
-            features = []
-            captions = []
-            low_confidences = []
-            
-            image_list = []
-            caption_list = []
-            confidences_list = []
-            low_confidences_list = []
-            mask_list = []  # New list for masks
-            score_list = []
-            idx_most_conf = idx_most_conf[:self.max_detections_per_object]
-
-            for idx_det in idx_most_conf:
-                if self.segment2d_results[object["image_idx"][idx_det]]['image_appear_efficiency'][object["mask_idx"][idx_det]] == '':
-                    image = self.segment2d_results[object["image_idx"][idx_det]]["image_rgb"]
-                    xyxy = object["xyxy"][idx_det]
-                    class_id = object["class_id"][idx_det]
-                    mask = object["mask"][idx_det]
-
-                    padding = 10
-                    x1, y1, x2, y2 = xyxy
-                    image_crop, mask_crop = self.crop_image_and_mask(image, mask, x1, y1, x2, y2, padding=padding)
-                    image_crop_modified = image_crop  # No modification
-
-                    _w, _h = image_crop.size
-                    if 'captions' not in object:
-                        object['captions'] = []
-                    if _w * _h < 70 * 70:
-                        low_confidences.append(True)
-                        score_list.append(0.5)
-                        continue
-                    else:
-                        low_confidences.append(False)
-
-
-                    self.chat.reset()
-                    print(f'        LLaVA {llava_time}...')
-                    llava_time = llava_time + 1
-                    caption = self.chat(image=image_crop_modified, query=self.prompt_llava)  # added by someone
-                    caption = caption.replace('.', '').replace(' ', '').replace('\n', '').lower()
-                    self.clear_line()
-                    object['captions'].append(caption)
-                    self.segment2d_results[object["image_idx"][idx_det]]['image_appear_efficiency'][object["mask_idx"][idx_det]] = 'done'
-                        
-                
-                    conf_value = conf[idx_det]
-                    image_list.append(image_crop)
+        if self.sam_variant == 'groundedsam':
+            for idx, object in enumerate(self.objects_post):
+                caption_list = []
+                for idx_det in range(len(object["image_idx"])):
+                    caption = self.segment2d_results[object["image_idx"][idx_det]]['caption'][object["mask_idx"][idx_det]]
                     caption_list.append(caption)
-                    confidences_list.append(conf_value)
-                    low_confidences_list.append(low_confidences[-1])
-                    mask_list.append(mask_crop)  # Add the cropped mask
-        self.clear_line()
+                caption = self.find_modes(caption_list)[0]
+                object['captions'] = [caption]
 
-    def update_node(self, obj_goal):
-        print('    update_node...')
-        node_num_ori = len(self.nodes)
-        node_num_new = len(self.objects_post)
+    def update_node(self):
         # update nodes
         for i, node in enumerate(self.nodes):
             caption_ori = node.caption
-            caption_new = self.find_modes(self.objects_post[i]['captions'])[0]
+            # caption_new = self.find_modes(self.objects_post[i]['captions'])[0]
+            caption_new = node.object['captions'][0]
             if caption_ori != caption_new:
-                node.update_caption(caption_new)
+                node.set_caption(caption_new)
         # add new nodes
-        for i in range(node_num_ori, node_num_new):
-            new_node = Node()
-            caption = self.find_modes(self.objects_post[i]['captions'])[0]
-            new_node.update_caption(caption)
-            new_node.object = self.objects_post[i]
-            self.nodes.add(new_node)
+        new_objects = list(filter(lambda object: 'node' not in object, self.objects_post))
+        for new_object in new_objects:
+            new_node = ObjectNode()
+            # caption = self.find_modes(self.objects_post[i]['captions'])[0]
+            caption = self.objects_post[i]['captions'][0]
+            new_node.set_caption(caption)
+            new_node.set_object(self.objects_post[i])
+            self.nodes.append(new_node)
         # get node.center and node.room
         for node in self.nodes:
-            points = node.object['pcd'].points
-            points = np.asarray(points)
+            points = np.asarray(node.object['pcd'].points)
             center = points.mean(axis=0)
-            x = int(center[0] * 100 / self.agent.resolution)
-            y = int(center[1] * 100 / self.agent.resolution)
-            y = self.agent.map_size - 1 - y
-            node.center = [x, y]
-            room_label = torch.where(self.agent.room_map[0, :, y, x]==1)[0]
-            if room_label.numel() == 1:
-                room_label = room_label.item()
-                if node.room_node:
+            x = int(center[0] * 100 / self.map_resolution)
+            y = int(center[1] * 100 / self.map_resolution)
+            y = self.map_size - 1 - y
+            node.set_center([x, y])
+            if 0 <= x < self.map_size and 0 <= y < self.map_size and hasattr(self, 'room_map'):
+                if sum(self.room_map[0, :, y, x]!=0).item() == 0:
+                    room_label = 0
+                else:
+                    room_label = torch.where(self.room_map[0, :, y, x]!=0)[0][0].item()
+            else:
+                room_label = 0
+            if node.room_node is not self.room_nodes[room_label]:
+                if node.room_node is not None:
                     node.room_node.nodes.discard(node)
                 node.room_node = self.room_nodes[room_label]
                 node.room_node.nodes.add(node)
-        # score all the new nodes
-        for i, node in enumerate(self.nodes):
-            if node.is_new_node:
-                caption = node.caption
-                print(f'        LLM {i}/{len(self.nodes)}...')
-                response = self.llm(prompt=self.prompt_gpt.format(caption, obj_goal))
-                self.clear_line()
-                node.reason = response
-        self.clear_line()
 
-    def update_edge(self, obj_goal):
-        print('    update_edge...')
+    def update_edge(self):
         old_nodes = []
         new_nodes = []
         for i, node in enumerate(self.nodes):
@@ -615,18 +691,19 @@ class SceneGraph():
                 node.is_new_node = False
             else:
                 old_nodes.append(node)
+        if len(new_nodes) == 0:
+            return
         # create the edge between new_node and old_node
+        new_edges = []
         for i, new_node in enumerate(new_nodes):
             for j, old_node in enumerate(old_nodes):
-                    new_edge = Edge(new_node, old_node)
-                    new_node.edges.add(new_edge)
-                    old_node.edges.add(new_edge)
+                new_edge = Edge(new_node, old_node)
+                new_edges.append(new_edge)
         # create the edge between new_node
         for i, new_node1 in enumerate(new_nodes):
             for j, new_node2 in enumerate(new_nodes[i + 1:]):
                 new_edge = Edge(new_node1, new_node2)
-                new_node1.edges.add(new_edge)
-                new_node2.edges.add(new_edge)
+                new_edges.append(new_edge)
         # get all new_edges
         new_edges = set()
         for i, node in enumerate(self.nodes):
@@ -634,136 +711,82 @@ class SceneGraph():
             new_edges = new_edges | node_new_edges
         new_edges = list(new_edges)
         # get all relation proposals
-        print(f'        LLM get all relation proposals...')
-        node_pairs = []
-        for new_edge in new_edges:
-            node_pairs.append(new_edge.node1.caption)
-            node_pairs.append(new_edge.node2.caption)
-        prompt = self.prompt_edge_proposal + '{} and {}.\n' * len(new_edges)
-        prompt = prompt.format(*node_pairs)
-        relations = self.llm(prompt=prompt)
-        relations = relations.split('\n')
-        if len(relations) == len(new_edges):
-            for i, relation in enumerate(relations):
-                new_edges[i].relation = relation
-        self.clear_line()
-        # discriminate all relation proposals
-        self.free_map = self.agent.fbe_free_map.cpu().numpy()[0,0,::-1].copy() > 0.5
-        for i, new_edge in enumerate(new_edges):
-            print(f'        discriminate_relation  {i}/{len(new_edges)}...')
-            if new_edge.relation == None or not self.discriminate_relation(new_edge):
-                new_edge.delete()
-            self.clear_line()
-        # get edges set
-        self.edges = set()
-        for node in self.nodes:
-            self.edges.update(node.edges)
-        self.clear_line()
+        if len(new_edges) > 0:
+            node_pairs = []
+            for new_edge in new_edges:
+                node_pairs.append(new_edge.node1.caption)
+                node_pairs.append(new_edge.node2.caption)
+            prompt = self.prompt_edge_proposal + '\n({}, {})' * len(new_edges)
+            prompt = prompt.format(*node_pairs)
+            relations = self.get_llm_response(prompt=prompt)
+            relations = relations.split('\n')
+            if len(relations) == len(new_edges):
+                for i, relation in enumerate(relations):
+                    new_edges[i].set_relation(relation)
+            # discriminate all relation proposals
+            self.free_map = self.fbe_free_map.cpu().numpy()[0,0,::-1].copy() > 0.5
+            for i, new_edge in enumerate(new_edges):
+                if new_edge.relation == None or not self.discriminate_relation(new_edge):
+                    new_edge.delete()
 
-    def create_subgraphs(self, obj_goal):
-        print('    create_subgraphs...')
-        self.subgraphs.clear() 
-        for node in self.nodes:
-            self.subgraphs.add(SubGraph(node))
-        for i, subgraph in enumerate(self.subgraphs):
-            subgraph_text = subgraph.get_subgraph_2_text()
-            print(f'        LLM {i}/{len(self.subgraphs)}...')
-            response = self.llm(prompt=self.prompt_score_subgraph.format(subgraph_text, obj_goal))
-            self.clear_line()
-            distance = response.split(' ')[0]
-            try:
-                distance = float(distance)
-            except ValueError:
-                distance = 2
-            if distance < 0.1:
-                distance = 0.1
-            score = 1 / distance
-            subgraph.distance = distance
-            subgraph.score = score
-        self.clear_line()
+    def update_group(self):
+        for room_node in self.room_nodes:
+            if len(room_node.nodes) > 0:
+                room_node.group_nodes = []
+                object_nodes = list(room_node.nodes)
+                centers = [object_node.center for object_node in object_nodes]
+                centers = np.array(centers)
+                dbscan = DBSCAN(eps=10, min_samples=1)  
+                clusters = dbscan.fit_predict(centers)  
+                for i in range(clusters.max() + 1):
+                    group_node = GroupNode()
+                    indices = np.where(clusters == i)[0]
+                    for index in indices:
+                        group_node.nodes.append(object_nodes[index])
+                    group_node.get_graph()
+                    room_node.group_nodes.append(group_node)
 
-    def update_observation(self, observations):
-        print(f'update_observation {self.agent.navigate_steps}...')
-        image_rgb = observations['rgb'].copy()
-        depth_array = observations['depth'].copy()
-        pose_matrix = self.get_pose_matrix(observations, self.agent.map_size_cm)
-        self.segment2d(image_rgb)
-        self.mapping3d(image_rgb, depth_array, cam_K=self.agent.camera_matrix, pose=pose_matrix)
+    def insert_goal(self, goal=None):
+        if goal is None:
+            goal = self.obj_goal
+        self.update_group()
+        room_node_text = ''
+        for room_node in self.room_nodes:
+            if len(room_node.group_nodes) > 0:
+                room_node_text = room_node_text + room_node.caption + ','
+        # room_node_text[-2] = '.'
+        if room_node_text == '':
+            return None
+        prompt = self.prompt_room_predict.format(goal, room_node_text)
+        response = self.get_llm_response(prompt=prompt)
+        response = response.lower()
+        predict_room_node = None
+        for room_node in self.room_nodes:
+            if len(room_node.group_nodes) > 0 and room_node.caption.lower() in response:
+                predict_room_node = room_node
+        if predict_room_node is None:
+            return None
+        for group_node in predict_room_node.group_nodes:
+            corr_score = self.graph_corr(goal, group_node)
+            group_node.corr_score = corr_score
+        sorted_group_nodes = sorted(predict_room_node.group_nodes)
+        self.mid_term_goal = sorted_group_nodes[-1].center
+        return self.mid_term_goal
+    
+    def update_scenegraph(self):
+        print(f'update_observation {self.navigate_steps}...')
+        self.segment2d()
+        if len(self.segment2d_results) == 0:
+            return
+        self.mapping3d()
         self.get_caption()
-        self.update_node(self.agent.obj_goal)
-        self.update_edge(self.agent.obj_goal)
-        # self.create_subgraphs(self.agent.obj_goal)
-        self.clear_line()
-
-    def get_scenegraph_object_list(self):
-        scenegraph_object_list = []
-        for node in self.nodes:
-            center = node.center
-            score = node.score
-            scenegraph_object_list.append({'center': center, 'score': score})
-            # scenegraph_object_list.append(node.caption)
-        return scenegraph_object_list
-
-    def get_scenegraph_subgraph_list(self):
-        scenegraph_subgraph_list = []
-        for subgraph in self.subgraphs:
-            center = subgraph.center
-            score = subgraph.score
-            scenegraph_subgraph_list.append({'center': center, 'score': score})
-        return scenegraph_subgraph_list
+        self.update_node()
+        self.update_edge()
     
-    def get_scene_graph_text(self):
-        scene_graph_text = {'nodes': [], 'edges': []}
-        for node in self.nodes:
-            scene_graph_text['nodes'].append(node.caption)
-        for edge in self.edges:
-            scene_graph_text['edges'].append(edge.text())
-        scene_graph_text = json.dumps(scene_graph_text)
-        return scene_graph_text
-    
-    def get_reason_text(self):
-        sorted_nodes = sorted(list(self.nodes))
-        reason_num = min(len(sorted_nodes), 4)
-        reason_text = []
-        for i in range(reason_num):
-            reason_text.append(sorted_nodes[i].reason)
-        reason_text = json.dumps(reason_text)
-        return reason_text
-    
-    def visualize_objects(self):
-        points_all = []
-        for object in self.objects_post:
-            points = object['pcd'].points
-            points = np.asarray(points)
-            colors = np.zeros_like(points, dtype=np.int64)
-            colors[:, 0] = 0
-            colors[:, 1] = 0
-            colors[:, 2] = 0
-            points = np.concatenate([points, colors], axis=1)
-            points_all.append(points)
-        points_all = np.concatenate(points_all, axis=0)
-        np.savetxt('', points_all)
-        return
-    
-    def llm(self, prompt):
-        if self.llm_name == 'GPT':
-            try:
-                client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-                chat_completion = client.chat.completions.create(  # added by someone
-                    model="gpt-3.5-turbo",
-                    # model="gpt-4",  # gpt-4
-                    messages=[{"role": "user", "content": prompt}],
-                    # timeout=10,  # Timeout in seconds
-                )
-                return chat_completion.choices[0].message.content
-            except:
-                return ''
-            
-    def clear_line(self):  
-        sys.stdout.write('\033[F')
-        sys.stdout.write('\033[J')
-        sys.stdout.flush()  
-
+    def get_llm_response(self, prompt):
+        response = self.llm(prompt)
+        return response
+        
     def find_modes(self, lst):  
         if len(lst) == 0:
             return ['object']
@@ -773,77 +796,125 @@ class SceneGraph():
             modes = [item for item, count in counts.items() if count == max_count]  
             return modes  
         
-    def discriminate_relation(self, edge):
-        image_idx1 = edge.node1.object["image_idx"]
-        image_idx2 = edge.node2.object["image_idx"]
+    def get_joint_image(self, node1, node2):
+        image_idx1 = node1.object["image_idx"]
+        image_idx2 = node2.object["image_idx"]
         image_idx = set(image_idx1) & set(image_idx2)
+        if len(image_idx) == 0:
+            return None
         conf_max = -np.inf
         # get joint images of the two nodes
         for idx in image_idx:
-            conf1 = edge.node1.object["conf"][image_idx1.index(idx)]
-            conf2 = edge.node2.object["conf"][image_idx2.index(idx)]
+            conf1 = node1.object["conf"][image_idx1.index(idx)]
+            conf2 = node2.object["conf"][image_idx2.index(idx)]
             conf = conf1 + conf2
             if conf > conf_max:
                 conf_max = conf
                 idx_max = idx
-        # discriminate short edge
-        if len(image_idx) > 0:
-            image = self.segment2d_results[idx_max]["image_rgb"]
-            image = Image.fromarray(image)
-            self.chat.reset()
-            response = self.chat(image=image, query=self.prompt_discriminate_relation.format(edge.node1.caption, edge.node2.caption, edge.relation))  # added by someone
+        image = self.segment2d_results[idx_max]["image_rgb"]
+        image = Image.fromarray(image)
+        return image
+
+    def discriminate_relation(self, edge):
+        image = self.get_joint_image(edge.node1, edge.node2)
+        if image is not None:
+            response = self.vlm(self.prompt_discriminate_relation.format(edge.node1.caption, edge.node2.caption, edge.relation), image)
             if 'yes' in response.lower():
                 return True
             else:
                 return False
-        # discriminate long edge
         else:
-            # discriminate same room 
             if edge.node1.room_node != edge.node2.room_node:
                 return False
             x1, y1 = edge.node1.center
             x2, y2 = edge.node2.center
             distance = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
-            if distance > self.agent.map_size // 20:
+            if distance > self.map_size // 40:
                 return False
             alpha = math.atan2(y2 - y1, x2 - x1)  
             sin_2alpha = 2 * math.sin(alpha) * math.cos(alpha)
             if not -0.05 < sin_2alpha < 0.05:
                 return False
-            # discriminate occlusion
-            n = 8
+            n = 3
             for i in range(1, n):
-                x = x1 + (x2 - x1) * i / n
-                y = y1 + (y2 - y1) * i / n
+                x = int(x1 + (x2 - x1) * i / n)
+                y = int(y1 + (y2 - y1) * i / n)
                 if not self.free_map[y, x]:
                     return False
             return True
         
-    def verify_goal(self, goal_xy):
-        goal_x, goal_y = goal_xy
-        distances = []
-        subgraphs_list = list(self.subgraphs)
-        for subgraph in subgraphs_list:
-            center_x, center_y = subgraph.center
-            distance = math.sqrt((goal_x - center_x)**2 + (goal_y - center_y)**2)
-            distances.append(distance)
-        distances = torch.tensor(distances)
-        sorted_distances, indices = torch.sort(distances, descending=True)
-        scores = [subgraphs_list[indices[i]].score for i in range(3)]
-        score = sum(scores) / len(scores)
-        score_threshold = 0.2
-        return score > score_threshold
-    
+    def perception(self):
+        N_stop = self.threshold_list[self.obj_goal]
+        N_stop = min(N_stop, self.N_max)
+        if self.agent.found_goal_times < N_stop:
+            # perform object detection
+            self.agent.detect_objects(self.observations)
+            if self.agent.total_steps % 2 == 0 and self.agent.args.reasoning in ['both','room']:
+                room_detection_result = self.agent.glip_demo.inference(self.observations["rgb"][:,:,[2,1,0]], self.agent.rooms_captions)
+                self.agent.update_room_map(self.observations, room_detection_result)
+
+    def score(self, frontier_locations_16, num_16_frontiers):
+        scores = np.zeros((num_16_frontiers))
+        for i in range(21):
+            num_obj = len(self.agent.obj_locations[i])
+            if num_obj <= 0:
+                continue
+            frontier_location_mtx = np.tile(frontier_locations_16, (num_obj,1,1))
+            obj_location_mtx = np.array(self.agent.obj_locations[i])[:,1:]
+            obj_confidence_mtx = np.tile(np.array(self.agent.obj_locations[i])[:,0],(num_16_frontiers,1)).transpose(1,0)
+            obj_location_mtx = np.tile(obj_location_mtx, (num_16_frontiers,1,1)).transpose(1,0,2)
+            dist_frontier_obj = np.square(frontier_location_mtx - obj_location_mtx)
+            dist_frontier_obj = np.sqrt(np.sum(dist_frontier_obj, axis=2)) / 20
+            near_frontier_obj = dist_frontier_obj < 1.6
+            obj_confidence_mtx[near_frontier_obj==False] = 0
+            obj_confidence_max = np.max(obj_confidence_mtx, axis=0)
+            score_1 = np.clip(1-(1-self.agent.prob_array_obj[i])-(1-obj_confidence_max), 0, 10)
+            score_2 = 1- np.clip(self.agent.prob_array_obj[i]+(1-obj_confidence_max), -10,1)
+            scores += score_1 - score_2
+
+        predict_goal_xy = self.insert_goal()
+        if predict_goal_xy is not None:
+            predict_goal_xy = np.array(predict_goal_xy).reshape(1, 2)
+            distance = np.linalg.norm(predict_goal_xy - frontier_locations_16, axis=1)
+            score = np.tile(np.array(10), (num_16_frontiers))
+            score[distance > 32] = 0
+            score = score / distance
+            scores += score
+        return scores
+
     def reset(self):
+        full_w, full_h = self.map_size, self.map_size
+        self.full_w = full_w
+        self.full_h = full_h
+        self.visited = torch.zeros(full_w, full_h).float().cpu().numpy()
+        self.num_of_goal = torch.zeros(full_w, full_h).int()
         self.segment2d_results = []
         self.reason = ''
         self.objects = MapObjectList(device=self.device)
         self.objects_post = MapObjectList(device=self.device)
-        self.nodes = set()
-        self.subgraphs = set()
+        self.nodes = []
+        self.group_nodes = []
+        self.init_room_nodes()
+        self.edge_text = ''
+        self.edge_list = []
+        self.reason_visualization = ''
 
-if __name__ == '__main__':
-    scenegraph = SceneGraph()
-    color_path = '/your/path/to/Replica/room0/results/frame000000.jpg'
-    scenegraph.segment2d(color_path)
-    a = 1
+    def graph_corr(self, goal, graph):
+        prompt = self.prompt_graph_corr_0.format(graph.center_node.caption, goal)
+        response_0 = self.get_llm_response(prompt=prompt)
+        prompt = self.prompt_graph_corr_1.format(graph.center_node.caption, goal)
+        response_1 = self.get_llm_response(prompt=prompt)
+        prompt = self.prompt_graph_corr_2.format(graph.caption, response_1)
+        response_2 = self.get_llm_response(prompt=prompt)
+        prompt = self.prompt_graph_corr_3.format(response_0, response_1 + response_2, graph.center_node.caption, goal)
+        response_3 = self.get_llm_response(prompt=prompt)
+        corr_score = self.text2value(response_3)
+        return corr_score
+    
+    def text2value(self, text):
+        try:
+            value = float(text)
+        except:
+            value = 0
+        return value
+   
