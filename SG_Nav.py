@@ -23,12 +23,12 @@ from habitat.utils.geometry_utils import (
 )
 from GLIP.maskrcnn_benchmark.engine.predictor_glip import GLIPDemo
 from GLIP.maskrcnn_benchmark.config import cfg as glip_cfg
-from utils_glip import *
+from utils.utils_glip import *
 
-from utils_fmm.fmm_planner import FMMPlanner    
-from utils_fmm.mapping import Semantic_Mapping
-import utils_fmm.control_helper as CH
-import utils_fmm.pose_utils as pu
+from utils.utils_fmm.fmm_planner import FMMPlanner    
+from utils.utils_fmm.mapping import Semantic_Mapping
+import utils.utils_fmm.control_helper as CH
+import utils.utils_fmm.pose_utils as pu
 from utils.image_process import add_text, add_text_list, add_rectangle, add_resized_image, crop_around_point
 
 from pslpython.model import Model as PSLModel
@@ -144,11 +144,11 @@ class SG_Nav_Agent():
         self.goal_idx = {}
         for key in projection:
             self.goal_idx[projection[key]] = categories_21.index(projection[key]) # each goal corresponding to which column in co-orrcurance matrix 
-        self.co_occur_mtx = np.load('ablations/npys/deberta_predict.npy')
+        self.co_occur_mtx = np.load('tools/obj.npy')
         self.co_occur_mtx -= self.co_occur_mtx.min()
         self.co_occur_mtx /= self.co_occur_mtx.max() 
         
-        self.co_occur_room_mtx = np.load('ablations/npys/deberta_predict_room.npy')
+        self.co_occur_room_mtx = np.load('tools/room.npy')
         self.co_occur_room_mtx -= self.co_occur_room_mtx.min()
         self.co_occur_room_mtx /= self.co_occur_room_mtx.max()
         
