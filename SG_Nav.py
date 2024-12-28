@@ -934,13 +934,13 @@ class SG_Nav_Agent():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--evaluation", type=str, choices=["local", "remote"]
+        "--evaluation", default="local", type=str, choices=["local", "remote"]
     )
     parser.add_argument(
         "--PSL_infer", default="one_hot", type=str, choices=["optim", "one_hot"]
     )
     parser.add_argument(
-        "--reasoning", default="obj", type=str, choices=["both", "room", "obj"]
+        "--reasoning", default="both", type=str, choices=["both", "room", "obj"]
     )
     parser.add_argument(
         "--llm", default="deberta", type=str, choices=["deberta", "chatgpt"]
