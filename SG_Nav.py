@@ -2,7 +2,6 @@ import argparse
 import imp
 import sys
 sys.path.append('/your/work/directory/')
-# from multiprocessing.context import ForkContext
 import os
 import math
 import numpy as np
@@ -17,19 +16,15 @@ import colorsys
 import cv2
 
 import habitat
-from habitat.utils.geometry_utils import (
-    quaternion_from_coeff,
-    quaternion_rotate_vector,
-)
 from GLIP.maskrcnn_benchmark.engine.predictor_glip import GLIPDemo
 from GLIP.maskrcnn_benchmark.config import cfg as glip_cfg
-from utils.utils_glip import *
 
 from utils.utils_fmm.fmm_planner import FMMPlanner    
 from utils.utils_fmm.mapping import Semantic_Mapping
 import utils.utils_fmm.control_helper as CH
 import utils.utils_fmm.pose_utils as pu
 from utils.image_process import add_text, add_text_list, add_rectangle, add_resized_image, crop_around_point
+from utils.utils_glip import *
 
 from pslpython.model import Model as PSLModel
 from pslpython.partition import Partition
