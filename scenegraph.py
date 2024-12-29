@@ -1,49 +1,29 @@
 import os
 import sys
-class SceneGraph():
-    def __init__(self):
-        pass
 sys.path.append('/your/path/to/Grounded-Segment-Anything/')
 sys.path.append('/your/path/to/concept-graphs/conceptgraph')
 sys.path.append('/your/work/directory/')
 import cv2
 import numpy as np
 import torch
-# import hydra
 import math
+import dataclasses
+import omegaconf
 import supervision as sv
-import random
 from PIL import Image
 from sklearn.cluster import DBSCAN  
 from collections import Counter 
-from segment_anything import sam_model_registry, SamPredictor, SamAutomaticMaskGenerator
+from omegaconf import DictConfig
+from pathlib import PosixPath, Path
+from supervision.draw.color import Color, ColorPalette
+from utils.utils_scenegraph.slam_classes import MapObjectList
+from utils.utils_scenegraph.utils import filter_objects, gobs_to_detection_list
+from utils.utils_scenegraph.mapping import compute_spatial_similarities, merge_detections_to_objects
 
-import dataclasses
-import omegaconf
-# import rich
 from grounded_sam_demo import load_image, load_model, get_grounding_output
 import GroundingDINO.groundingdino.datasets.transforms as T
-from omegaconf import DictConfig
-from pathlib import PosixPath
-from pathlib import Path
-from supervision.draw.color import Color, ColorPalette
-# from conceptgraph.llava.llava_model import LLaVA
-# from conceptgraph.utils.general_utils import to_tensor, to_numpy, Timer
-from conceptgraph.slam.slam_classes import MapObjectList, DetectionList
-from conceptgraph.slam.utils import (
-    create_or_load_colors,
-    merge_obj2_into_obj1, 
-    denoise_objects,
-    filter_objects,
-    merge_objects, 
-    gobs_to_detection_list,
-)
-from conceptgraph.slam.mapping import (
-    compute_spatial_similarities,
-    compute_visual_similarities,
-    aggregate_similarities,
-    merge_detections_to_objects
-)
+from segment_anything import sam_model_registry, SamPredictor, SamAutomaticMaskGenerator
+
 from model_server.llm_client import LLM_Client
 from model_server.vlm_client import VLM_Client
 
@@ -177,7 +157,7 @@ class SceneGraph():
         self.BG_CLASSES = ["wall", "floor", "ceiling"]
         self.rooms = ['bedroom', 'living room', 'bathroom', 'kitchen', 'dining room', 'office room', 'gym', 'lounge', 'laundry room']
         self.objects = MapObjectList(device=self.device)
-        self.objects = MapObjectList(device=self.device)
+        self.objects_post = MapObjectList(device=self.device)
         self.nodes = []
         self.edge_text = ''
         self.edge_list = []
