@@ -1,7 +1,4 @@
 import argparse
-import imp
-import sys
-sys.path.append('/your/work/directory/')
 import os
 import math
 import numpy as np
@@ -35,7 +32,7 @@ from pslpython.partition import Partition
 from pslpython.predicate import Predicate
 from pslpython.rule import Rule
 
-from .scenegraph import SceneGraph
+from scenegraph import SceneGraph
 
 
 ADDITIONAL_PSL_OPTIONS = {

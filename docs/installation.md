@@ -7,8 +7,8 @@ Download object-goal navigation episodes dataset from [here](https://github.com/
 According to your dataset path, set the scene dataset path (SCENES_DIR) and episode dataset path (DATA_PATH) in config file `configs/challenge_objectnav2021.local.rgbd.yaml`.
 
 **Step 2**
-Install habitat-sim according to [here](https://github.com/facebookresearch/habitat-sim).
-Install habitat-lab according to [here](https://github.com/facebookresearch/habitat-lab) or install habitat-lab with ``pip install -e habitat-lab``.
+Install habitat-sim==0.2.4 according to [here](https://github.com/facebookresearch/habitat-sim).
+Install habitat-lab with ``pip install -e habitat-lab``.
 
 **Step 3**
 Install the conda environment we provided.
@@ -29,5 +29,5 @@ wget https://huggingface.co/GLIPModel/GLIP/resolve/main/glip_large_model.pth
 ```
 
 **Step 5**
-Install ConceptGraph according to [here](https://github.com/concept-graphs/concept-graphs).
+Install Grounded SAM according to [here](https://github.com/IDEA-Research/Grounded-Segment-Anything).
 

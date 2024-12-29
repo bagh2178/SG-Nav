@@ -11,6 +11,7 @@ We propose a <b>zero-shot</b> object-goal navigation framework by constructing a
 
 
 ## News
+- [2024/12/29]: We update the code and simplify the installation.
 - [2024/09/26]: SG-Nav is accepted to NeurIPS 2024!
 
 

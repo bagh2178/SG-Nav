@@ -1,8 +1,6 @@
 import os
 import sys
-sys.path.append('/your/path/to/Grounded-Segment-Anything/')
-sys.path.append('/your/path/to/concept-graphs/conceptgraph')
-sys.path.append('/your/work/directory/')
+sys.path.append('/path/to/Grounded-Segment-Anything/')
 import cv2
 import numpy as np
 import torch
@@ -207,7 +205,7 @@ Object pair(s):
         self.vlm = VLM_Client()
 
     def set_cfg(self):
-        cfg = {'dataset_root': PosixPath('/your/path/to/Replica'), 'dataset_config': PosixPath('/your/path/to/concept-graphs/conceptgraph/dataset/dataconfigs/replica/replica.yaml'), 'scene_id': 'room0', 'start': 0, 'end': -1, 'stride': 5, 'image_height': 680, 'image_width': 1200, 'gsa_variant': 'none', 'detection_folder_name': 'gsa_detections_${gsa_variant}', 'det_vis_folder_name': 'gsa_vis_${gsa_variant}', 'color_file_name': 'gsa_classes_${gsa_variant}', 'device': 'cuda', 'use_iou': True, 'spatial_sim_type': 'overlap', 'phys_bias': 0.0, 'match_method': 'sim_sum', 'semantic_threshold': 0.5, 'physical_threshold': 0.5, 'sim_threshold': 1.2, 'use_contain_number': False, 'contain_area_thresh': 0.95, 'contain_mismatch_penalty': 0.5, 'mask_area_threshold': 25, 'mask_conf_threshold': 0.95, 'max_bbox_area_ratio': 0.5, 'skip_bg': True, 'min_points_threshold': 16, 'downsample_voxel_size': 0.025, 'dbscan_remove_noise': True, 'dbscan_eps': 0.1, 'dbscan_min_points': 10, 'obj_min_points': 0, 'obj_min_detections': 3, 'merge_overlap_thresh': 0.7, 'merge_visual_sim_thresh': 0.8, 'merge_text_sim_thresh': 0.8, 'denoise_interval': 20, 'filter_interval': -1, 'merge_interval': 20, 'save_pcd': True, 'save_suffix': 'overlap_maskconf0.95_simsum1.2_dbscan.1_merge20_masksub', 'vis_render': False, 'debug_render': False, 'class_agnostic': True, 'save_objects_all_frames': True, 'render_camera_path': 'replica_room0.json', 'max_num_points': 512}
+        cfg = {'dataset_config': PosixPath('tools/replica.yaml'), 'scene_id': 'room0', 'start': 0, 'end': -1, 'stride': 5, 'image_height': 680, 'image_width': 1200, 'gsa_variant': 'none', 'detection_folder_name': 'gsa_detections_${gsa_variant}', 'det_vis_folder_name': 'gsa_vis_${gsa_variant}', 'color_file_name': 'gsa_classes_${gsa_variant}', 'device': 'cuda', 'use_iou': True, 'spatial_sim_type': 'overlap', 'phys_bias': 0.0, 'match_method': 'sim_sum', 'semantic_threshold': 0.5, 'physical_threshold': 0.5, 'sim_threshold': 1.2, 'use_contain_number': False, 'contain_area_thresh': 0.95, 'contain_mismatch_penalty': 0.5, 'mask_area_threshold': 25, 'mask_conf_threshold': 0.95, 'max_bbox_area_ratio': 0.5, 'skip_bg': True, 'min_points_threshold': 16, 'downsample_voxel_size': 0.025, 'dbscan_remove_noise': True, 'dbscan_eps': 0.1, 'dbscan_min_points': 10, 'obj_min_points': 0, 'obj_min_detections': 3, 'merge_overlap_thresh': 0.7, 'merge_visual_sim_thresh': 0.8, 'merge_text_sim_thresh': 0.8, 'denoise_interval': 20, 'filter_interval': -1, 'merge_interval': 20, 'save_pcd': True, 'save_suffix': 'overlap_maskconf0.95_simsum1.2_dbscan.1_merge20_masksub', 'vis_render': False, 'debug_render': False, 'class_agnostic': True, 'save_objects_all_frames': True, 'render_camera_path': 'replica_room0.json', 'max_num_points': 512}
         cfg = DictConfig(cfg)
         if self.is_navigation:
             cfg.sim_threshold = 0.8
@@ -628,7 +626,6 @@ Object pair(s):
         # update nodes
         for i, node in enumerate(self.nodes):
             caption_ori = node.caption
-            # caption_new = self.find_modes(self.objects_post[i]['captions'])[0]
             caption_new = node.object['captions'][0]
             if caption_ori != caption_new:
                 node.set_caption(caption_new)
@@ -636,10 +633,9 @@ Object pair(s):
         new_objects = list(filter(lambda object: 'node' not in object, self.objects_post))
         for new_object in new_objects:
             new_node = ObjectNode()
-            # caption = self.find_modes(self.objects_post[i]['captions'])[0]
-            caption = self.objects_post[i]['captions'][0]
+            caption = new_object['captions'][0]
             new_node.set_caption(caption)
-            new_node.set_object(self.objects_post[i])
+            new_node.set_object(new_object)
             self.nodes.append(new_node)
         # get node.center and node.room
         for node in self.nodes:
@@ -754,7 +750,7 @@ Object pair(s):
         return self.mid_term_goal
     
     def update_scenegraph(self):
-        print(f'update_observation {self.navigate_steps}...')
+        print(f'navigate step: {self.navigate_steps}')
         self.segment2d()
         if len(self.segment2d_results) == 0:
             return

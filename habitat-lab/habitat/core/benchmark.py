@@ -177,42 +177,24 @@ class Benchmark:
             
             experiment_name = agent.experiment_name
 
-            path = f'output_new/{experiment_name}'
+            path = f'data/results/{experiment_name}'
             if not os.path.exists(path):
                 os.makedirs(path)
 
-            with open(f'output_new/{experiment_name}/results.txt', 'w') as fp:
+            with open(f'data/results/{experiment_name}/results.txt', 'w') as fp:
                 for item in all_metrics:
                     # write each item on a new line
                     fp.write("%s\n" % item)
                     
-            with open(f'output_new/{experiment_name}/results_0.txt', 'w') as fp:
+            with open(f'data/results/{experiment_name}/results_0.txt', 'w') as fp:
                 for item in all_metrics_0:
                     # write each item on a new line
                     fp.write("%s\n" % item)
 
-            with open(f'output_new/{experiment_name}/results_avg.txt', 'w') as fp:
+            with open(f'data/results/{experiment_name}/results_avg.txt', 'w') as fp:
                 for item in all_metrics_avg:
                     # write each item on a new line
                     fp.write("%s\n" % item)
-
-            def imgs2gif(imgPaths, saveName, duration=None, loop=0, fps=None):
-                if fps:
-                    duration = 1/fps
-                images = [imageio.imread(str(img_path)) for img_path in imgPaths]
-                imageio.mimsave(saveName, images, "gif", duration=duration, loop=loop)
-            
-            def save_gif(experiment_name):
-                pathlist = Path(f"figures/{experiment_name}/image").glob("*.png")   #需要输入的一些列图片路径
-                p_list = []  #新建空列表,用于存储所有用于合并生成gif的图片路径
-                for n, p in enumerate(pathlist):    #n是图片数据,p是对应n的文件名
-                    p_list.append(p)     #for循环,遍历所有图片,并一个一个将图片的路径存入p_lis
-                path = f'figures/{experiment_name}/gif'
-                if not os.path.exists(path):
-                    os.makedirs(path)
-                imgs2gif(p_list, f"figures/{experiment_name}/gif/gif_{count_episodes}.gif", 0.25, 0)   #输入图片路径，输出文件名, 每张图片的持续时间(单位 秒s), 是否循环播放(0是，1否)
-                # for p in p_list:
-                #     os.remove(p)
 
             def result_text_list():
                 success_text = 'success' if metrics['success'] == 1 else 'fail'
