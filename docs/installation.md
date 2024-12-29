@@ -31,3 +31,7 @@ wget https://huggingface.co/GLIPModel/GLIP/resolve/main/glip_large_model.pth
 **Step 5**
 Install Grounded SAM according to [here](https://github.com/IDEA-Research/Grounded-Segment-Anything).
 
+In `scenegraph.py`, change the path `'/path/to/Grounded-Segment-Anything/'` to your installation path of Grounded SAM.
+
+**Step 6**
+Install Ollama from [here](https://ollama.com/). Deploy llama3.3 70b as the LLM and llama3.2-vision 90b as the VLM. Replace the `LLM_Client` and `VLM_Client` in `scenegraph.py` with Ollama.
