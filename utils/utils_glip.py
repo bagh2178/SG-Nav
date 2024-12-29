@@ -47,7 +47,7 @@ door_captions = 'doorway. hallway.'# v2
 # LLM reasoning prompt
 # room_prompt = "In which room will you most likely to find a "
 
-with gzip.open("habitat-challenge-data/data/val/val.json.gz", 'r') as fin:        # 4. gzip
+with gzip.open("tools/val.json.gz", 'r') as fin:        # 4. gzip
     json_bytes = fin.read()                      # 3. bytes (i.e. UTF-8)
 
 json_str = json_bytes.decode('utf-8')            # 2. string (i.e. JSON)
