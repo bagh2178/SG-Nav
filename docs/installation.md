@@ -8,6 +8,7 @@ According to your dataset path, set the scene dataset path (SCENES_DIR) and epis
 
 **Step 2**
 Install habitat-sim==0.2.4 according to [here](https://github.com/facebookresearch/habitat-sim).
+Replace the `agent/agent.py` in the installed habitat-sim package with `tools/agent.py` in our repository.
 Install habitat-lab with ``pip install -e habitat-lab``.
 
 **Step 3**
