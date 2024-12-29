@@ -362,8 +362,6 @@ def generate_anchors(
     """
     return _generate_anchors(
         stride,
-        # np.array(sizes, dtype=np.float) / stride,
-        # np.array(aspect_ratios, dtype=np.float),
         np.array(sizes, dtype=float) / stride,
         np.array(aspect_ratios, dtype=float),
     )
@@ -373,7 +371,6 @@ def _generate_anchors(base_size, scales, aspect_ratios):
     """Generate anchor (reference) windows by enumerating aspect ratios X
     scales wrt a reference (0, 0, base_size - 1, base_size - 1) window.
     """
-    # anchor = np.array([1, 1, base_size, base_size], dtype=np.float) - 1
     anchor = np.array([1, 1, base_size, base_size], dtype=float) - 1
     anchors = _ratio_enum(anchor, aspect_ratios)
     anchors = np.vstack(

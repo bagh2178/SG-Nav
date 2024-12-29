@@ -207,10 +207,8 @@ class DyConv(torch.nn.Module):
             if level > 0:
                 temp_fea.append(self.DyConv[2](visual_feats[level - 1], **conv_args))
             if level < len(visual_feats) - 1:
-                temp_fea.append(F.upsample_bilinear(self.DyConv[0](visual_feats[level + 1], **conv_args),  # annotated by someone
+                temp_fea.append(F.upsample_bilinear(self.DyConv[0](visual_feats[level + 1], **conv_args),
                                                     size=[feature.size(2), feature.size(3)]))
-                # temp_fea.append(F.interpolate(self.DyConv[0](visual_feats[level + 1], **conv_args),
-                                                    # size=[feature.size(2), feature.size(3)]))
             mean_fea = torch.mean(torch.stack(temp_fea), dim=0, keepdim=False)
 
             if self.AttnConv is not None:
@@ -258,8 +256,7 @@ class BertEncoderLayer(BertPreTrainedModel):
         input_shape = hidden_states.size()[:-1]
         # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
         # ourselves in which case we just need to make it broadcastable to all heads.
-        extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_shape, device)  # annotated by someone
-        # extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_shape)
+        extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_shape, device)
 
         self_attention_outputs = self.attention(
             hidden_states,
