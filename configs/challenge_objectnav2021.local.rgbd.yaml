@@ -49,5 +49,5 @@ TASK:
 DATASET:
   TYPE: ObjectNav-v1
   SPLIT: val
-  DATA_PATH: /mnt/data-1/data/MatterPort3D/objectnav/mp3d/v1/{split}/{split}.json.gz
-  SCENES_DIR: "/mnt/data-1/data/MatterPort3D/"
+  DATA_PATH: /path/to/MatterPort3D/objectnav/mp3d/v1/{split}/{split}.json.gz
+  SCENES_DIR: "/path/to/MatterPort3D/"
