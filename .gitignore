@@ -1,3 +1,6 @@
 **/__pycache__/
 glip_large_model.pth
 /data
+/GLIP/build
+/GLIP/maskrcnn_benchmark.egg-info
+*.so

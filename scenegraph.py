@@ -290,7 +290,7 @@ Object pair(s):
             # model = YOLO(args.model_path)
             # return model
         elif variant == "groundedsam":
-            model = load_model(self.groundingdino_config_file, self.groundingdino_checkpoint, device=device)
+            model = load_model(self.groundingdino_config_file, self.groundingdino_checkpoint, None, device=device)
             predictor = SamPredictor(sam_model_registry[self.sam_version](checkpoint=self.sam_checkpoint).to(device))
             return model, predictor
         else:
@@ -432,44 +432,6 @@ Object pair(s):
         text_feats = np.concatenate(text_feats, axis=0)
 
         return image_crops, image_feats, text_feats
-
-    def vis_result_fast(
-        self,
-        image: np.ndarray, 
-        detections: sv.Detections, 
-        classes: list, 
-        color = ColorPalette.default(), 
-        instance_random_color: bool = False,
-        draw_bbox: bool = True,
-    ) -> np.ndarray:
-        '''
-        Annotate the image with the detection results. 
-        This is fast but of the same resolution of the input image, thus can be blurry. 
-        '''
-        # annotate image with detections
-        box_annotator = sv.BoxAnnotator(
-            color = color,
-            text_scale=0.3,
-            text_thickness=1,
-            text_padding=2,
-        )
-        mask_annotator = sv.MaskAnnotator(
-            color = color
-        )
-        labels = [f"{classes[class_id]} {confidence:0.2f}" for confidence, class_id in zip(detections.confidence, detections.class_id)]  # added by someone
-        
-        if instance_random_color:
-            # generate random colors for each segmentation
-            # First create a shallow copy of the input detections
-            detections = dataclasses.replace(detections)
-            detections.class_id = np.arange(len(detections))
-            
-        image_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-        annotated_image = mask_annotator.annotate(scene=image_bgr.copy(), detections=detections)
-        
-        if draw_bbox:
-            annotated_image = box_annotator.annotate(scene=annotated_image, detections=detections, labels=labels)
-        return annotated_image, labels
 
     def process_cfg(self, cfg: DictConfig):
         cfg.dataset_root = Path(cfg.dataset_root)
