@@ -1,31 +1,17 @@
 import argparse
-import os
+import copy
 import math
+import os
+from matplotlib import colors
+import cv2
 import numpy as np
+import pandas
 import skimage
 import torch
-from torchvision.utils import save_image
-import copy
-from PIL import Image, ImageDraw, ImageFont
-import pandas
-from matplotlib import colors
-import colorsys
-import cv2
-
 import habitat
-from habitat.utils.geometry_utils import (
-    quaternion_from_coeff,
-    quaternion_rotate_vector,
-)
-from GLIP.maskrcnn_benchmark.engine.predictor_glip import GLIPDemo
-from GLIP.maskrcnn_benchmark.config import cfg as glip_cfg
 
-from utils.utils_fmm.fmm_planner import FMMPlanner    
-from utils.utils_fmm.mapping import Semantic_Mapping
-import utils.utils_fmm.control_helper as CH
-import utils.utils_fmm.pose_utils as pu
-from utils.image_process import line_list, add_text, add_text_list, add_rectangle, add_resized_image, crop_around_point, draw_agent, draw_goal
-from utils.utils_glip import *
+from GLIP.maskrcnn_benchmark.config import cfg as glip_cfg
+from GLIP.maskrcnn_benchmark.engine.predictor_glip import GLIPDemo
 
 from pslpython.model import Model as PSLModel
 from pslpython.partition import Partition
@@ -33,6 +19,22 @@ from pslpython.predicate import Predicate
 from pslpython.rule import Rule
 
 from scenegraph import SceneGraph
+
+import utils.utils_fmm.control_helper as CH
+import utils.utils_fmm.pose_utils as pu
+from utils.utils_fmm.fmm_planner import FMMPlanner    
+from utils.utils_fmm.mapping import Semantic_Mapping
+from utils.utils_glip import *
+from utils.image_process import (
+    add_resized_image,
+    add_rectangle,
+    add_text,
+    add_text_list,
+    crop_around_point,
+    draw_agent,
+    draw_goal,
+    line_list
+)
 
 
 ADDITIONAL_PSL_OPTIONS = {

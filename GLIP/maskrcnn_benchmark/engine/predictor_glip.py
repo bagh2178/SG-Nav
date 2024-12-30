@@ -19,7 +19,9 @@ from maskrcnn_benchmark.utils import cv2_util
 
 engine = inflect.engine()
 nltk.download('punkt')
+nltk.download('punkt_tab')
 nltk.download('averaged_perceptron_tagger')
+nltk.download('averaged_perceptron_tagger_eng')
 
 import timeit
 

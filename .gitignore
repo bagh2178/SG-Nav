@@ -3,4 +3,5 @@ glip_large_model.pth
 /data
 /GLIP/build
 /GLIP/maskrcnn_benchmark.egg-info
+/segment_anything/segment_anything.egg-info/
 *.so

@@ -1,29 +1,27 @@
+import base64
+import math
 import os
-import sys
-sys.path.append('/path/to/Grounded-Segment-Anything/')
+from collections import Counter
+from io import BytesIO
+from pathlib import Path, PosixPath
 import cv2
 import numpy as np
-import torch
-import math
-import dataclasses
 import omegaconf
-import ollama
-import base64
-from io import BytesIO
 import supervision as sv
-from PIL import Image
-from sklearn.cluster import DBSCAN  
-from collections import Counter 
+import torch
+import ollama
 from omegaconf import DictConfig
-from pathlib import PosixPath, Path
+from PIL import Image
+from sklearn.cluster import DBSCAN
 from supervision.draw.color import Color, ColorPalette
+
+from segment_anything import SamAutomaticMaskGenerator, SamPredictor, sam_model_registry
+from GroundingDINO.groundingdino.datasets import transforms as T
+
+from utils.utils_scenegraph.mapping import compute_spatial_similarities, merge_detections_to_objects
 from utils.utils_scenegraph.slam_classes import MapObjectList
 from utils.utils_scenegraph.utils import filter_objects, gobs_to_detection_list
-from utils.utils_scenegraph.mapping import compute_spatial_similarities, merge_detections_to_objects
-
-from grounded_sam_demo import load_image, load_model, get_grounding_output
-import GroundingDINO.groundingdino.datasets.transforms as T
-from segment_anything import sam_model_registry, SamPredictor, SamAutomaticMaskGenerator
+from utils.utils_scenegraph.grounded_sam_demo import get_grounding_output, load_image, load_model
 
 
 ADDITIONAL_PSL_OPTIONS = {
