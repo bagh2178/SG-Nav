@@ -481,3 +481,10 @@ def merge_obj2_into_obj1(cfg, obj1, obj2, run_dbscan=True):
     # obj1['text_ft'] = F.normalize(obj1['text_ft'], dim=0)
     
     return obj1
+
+def text2value(text):
+    try:
+        value = float(text)
+    except:
+        value = 0
+    return value

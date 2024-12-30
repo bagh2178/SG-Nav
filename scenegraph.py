@@ -19,7 +19,7 @@ from GroundingDINO.groundingdino.datasets import transforms as T
 
 from utils.utils_scenegraph.mapping import compute_spatial_similarities, merge_detections_to_objects
 from utils.utils_scenegraph.slam_classes import MapObjectList
-from utils.utils_scenegraph.utils import filter_objects, gobs_to_detection_list
+from utils.utils_scenegraph.utils import filter_objects, gobs_to_detection_list, text2value
 from utils.utils_scenegraph.grounded_sam_demo import get_grounding_output, load_image, load_model
 
 
@@ -200,6 +200,23 @@ Object pair(s):
         self.prompt_graph_corr_2 = 'Here is the objects and relationships near A: [{}] You answer the following question with a short sentence based on this information. Question: {}'
         self.prompt_graph_corr_3 = 'The probability of A and B appearing together is about {}. Based on the dialog: [{}], re-determine the probability of A and B appearing together. A:[{}], B:[{}]. Even if you do not have enough information, you have to answer with a value from 0 to 1 anyway. Answer only the value of probability and do not answer any other text.'
         self.mask_generator = self.get_sam_mask_generator(self.sam_variant, self.device)
+
+    def reset(self):
+        full_w, full_h = self.map_size, self.map_size
+        self.full_w = full_w
+        self.full_h = full_h
+        self.visited = torch.zeros(full_w, full_h).float().cpu().numpy()
+        self.num_of_goal = torch.zeros(full_w, full_h).int()
+        self.segment2d_results = []
+        self.reason = ''
+        self.objects = MapObjectList(device=self.device)
+        self.objects_post = MapObjectList(device=self.device)
+        self.nodes = []
+        self.group_nodes = []
+        self.init_room_nodes()
+        self.edge_text = ''
+        self.edge_list = []
+        self.reason_visualization = ''
 
     def set_cfg(self):
         cfg = {'dataset_config': PosixPath('tools/replica.yaml'), 'scene_id': 'room0', 'start': 0, 'end': -1, 'stride': 5, 'image_height': 680, 'image_width': 1200, 'gsa_variant': 'none', 'detection_folder_name': 'gsa_detections_${gsa_variant}', 'det_vis_folder_name': 'gsa_vis_${gsa_variant}', 'color_file_name': 'gsa_classes_${gsa_variant}', 'device': 'cuda', 'use_iou': True, 'spatial_sim_type': 'overlap', 'phys_bias': 0.0, 'match_method': 'sim_sum', 'semantic_threshold': 0.5, 'physical_threshold': 0.5, 'sim_threshold': 1.2, 'use_contain_number': False, 'contain_area_thresh': 0.95, 'contain_mismatch_penalty': 0.5, 'mask_area_threshold': 25, 'mask_conf_threshold': 0.95, 'max_bbox_area_ratio': 0.5, 'skip_bg': True, 'min_points_threshold': 16, 'downsample_voxel_size': 0.025, 'dbscan_remove_noise': True, 'dbscan_eps': 0.1, 'dbscan_min_points': 10, 'obj_min_points': 0, 'obj_min_detections': 3, 'merge_overlap_thresh': 0.7, 'merge_visual_sim_thresh': 0.8, 'merge_text_sim_thresh': 0.8, 'denoise_interval': 20, 'filter_interval': -1, 'merge_interval': 20, 'save_pcd': True, 'save_suffix': 'overlap_maskconf0.95_simsum1.2_dbscan.1_merge20_masksub', 'vis_render': False, 'debug_render': False, 'class_agnostic': True, 'save_objects_all_frames': True, 'render_camera_path': 'replica_room0.json', 'max_num_points': 512}
@@ -837,28 +854,10 @@ Object pair(s):
         N_stop = self.threshold_list[self.obj_goal]
         N_stop = min(N_stop, self.N_max)
         if self.agent.found_goal_times < N_stop:
-            # perform object detection
             self.agent.detect_objects(self.observations)
             if self.agent.total_steps % 2 == 0 and self.agent.args.reasoning in ['both','room']:
                 room_detection_result = self.agent.glip_demo.inference(self.observations["rgb"][:,:,[2,1,0]], self.agent.rooms_captions)
                 self.agent.update_room_map(self.observations, room_detection_result)
-
-    def reset(self):
-        full_w, full_h = self.map_size, self.map_size
-        self.full_w = full_w
-        self.full_h = full_h
-        self.visited = torch.zeros(full_w, full_h).float().cpu().numpy()
-        self.num_of_goal = torch.zeros(full_w, full_h).int()
-        self.segment2d_results = []
-        self.reason = ''
-        self.objects = MapObjectList(device=self.device)
-        self.objects_post = MapObjectList(device=self.device)
-        self.nodes = []
-        self.group_nodes = []
-        self.init_room_nodes()
-        self.edge_text = ''
-        self.edge_list = []
-        self.reason_visualization = ''
 
     def graph_corr(self, goal, graph):
         prompt = self.prompt_graph_corr_0.format(graph.center_node.caption, goal)
@@ -869,13 +868,5 @@ Object pair(s):
         response_2 = self.get_llm_response(prompt=prompt)
         prompt = self.prompt_graph_corr_3.format(response_0, response_1 + response_2, graph.center_node.caption, goal)
         response_3 = self.get_llm_response(prompt=prompt)
-        corr_score = self.text2value(response_3)
+        corr_score = text2value(response_3)
         return corr_score
-    
-    def text2value(self, text):
-        try:
-            value = float(text)
-        except:
-            value = 0
-        return value
-   
