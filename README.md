@@ -33,17 +33,20 @@ Method Pipeline:
 ## Installation
 
 **Step 1 (Dataset)**
+
 Download Matterport3D scene dataset from [here](https://niessner.github.io/Matterport/).
 Download object-goal navigation episodes dataset from [here](https://github.com/facebookresearch/habitat-lab/blob/main/DATASETS.md).
 According to your dataset path, set the scene dataset path (SCENES_DIR) and episode dataset path (DATA_PATH) in config file `configs/challenge_objectnav2021.local.rgbd.yaml`.
 
 **Step 2 (Environment)**
+
 Create conda environment with python==3.9.
 ```
 conda create -n SG_Nav python==3.9
 ```
 
 **Step 3 (Simulator)**
+
 Install habitat-sim==0.2.4 and habitat-lab.
 ```
 conda install habitat-sim==0.2.4 -c conda-forge -c aihabitat
@@ -56,6 +59,7 @@ cp tools/agent.py ${HABITAT_SIM_PATH}/habitat_sim/agent/
 ```
 
 **Step 4 (Package)**
+
 Install pytorch, pytorch3d and faiss. Install other packages.
 ```
 conda install -c pytorch faiss-gpu=1.8.0
