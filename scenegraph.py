@@ -13,7 +13,6 @@ import ollama
 from omegaconf import DictConfig
 from PIL import Image
 from sklearn.cluster import DBSCAN
-from supervision.draw.color import Color, ColorPalette
 
 from segment_anything import SamAutomaticMaskGenerator, SamPredictor, sam_model_registry
 from GroundingDINO.groundingdino.datasets import transforms as T
@@ -710,14 +709,13 @@ Object pair(s):
         return self.mid_term_goal
     
     def update_scenegraph(self):
-        print(f'navigate step: {self.navigate_steps}')
+        print(f'Navigate Step: {self.navigate_steps}', end='\r')
         self.segment2d()
-        if len(self.segment2d_results) == 0:
-            return
-        self.mapping3d()
-        self.get_caption()
-        self.update_node()
-        self.update_edge()
+        if len(self.segment2d_results) > 0:
+            self.mapping3d()
+            self.get_caption()
+            self.update_node()
+            self.update_edge()
     
     def get_llm_response(self, prompt):
         response = ollama.chat(

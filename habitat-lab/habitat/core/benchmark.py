@@ -157,8 +157,6 @@ class Benchmark:
                     metrics = self._env.get_metrics()
                 observations = self._env.step(action)
                 agent.update_metrics(self._env.get_metrics())
-                if self._env.episode_over:
-                    print('!!!!!!!!!!!!action={}'.format(action))
 
             metrics = self._env.get_metrics()
             all_metrics.append(metrics)
