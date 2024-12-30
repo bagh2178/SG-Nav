@@ -24,7 +24,7 @@ from utils.utils_fmm.fmm_planner import FMMPlanner
 from utils.utils_fmm.mapping import Semantic_Mapping
 import utils.utils_fmm.control_helper as CH
 import utils.utils_fmm.pose_utils as pu
-from utils.image_process import add_text, add_text_list, add_rectangle, add_resized_image, crop_around_point
+from utils.image_process import line_list, add_text, add_text_list, add_rectangle, add_resized_image, crop_around_point, draw_agent, draw_goal
 from utils.utils_glip import *
 
 from pslpython.model import Model as PSLModel
@@ -62,7 +62,6 @@ class SG_Nav_Agent():
             else torch.device("cpu")
         )
         self.prev_action = 0
-        self.current_search_room = ''
         self.navigate_steps = 0
         self.move_steps = 0
         self.total_steps = 0
@@ -84,6 +83,8 @@ class SG_Nav_Agent():
         self.nav_without_goal_step = 0
         self.former_collide = 0
         self.history_pose = []
+        self.visualize_image_list = []
+        self.count_episodes = -1
         self.loop_time = 0
         self.stuck_time = 0
         self.rooms = rooms
@@ -158,15 +159,14 @@ class SG_Nav_Agent():
             self.add_rules(self.psl_model)
 
         ### ----- load scene graph module ----- ###
-        self.goal_verification = True
         self.scenegraph = SceneGraph(map_resolution=self.map_resolution, map_size_cm=self.map_size_cm, map_size=self.map_size, camera_matrix=self.camera_matrix)
 
-        self.experiment_name = 'test'
+        self.experiment_name = 'test_2'
 
         if self.split:
             self.experiment_name = self.experiment_name + f'/[{self.args.split_l}:{self.args.split_r}]'
 
-        self.save_image_dir = f'figures/{self.experiment_name}/image'
+        self.visualization_dir = f'data/visualization/{self.experiment_name}/'
 
         print('scene graph module init finish!!!')
 
@@ -208,7 +208,7 @@ class SG_Nav_Agent():
         model.add_rule(Rule('2: ShortDist(F) -> Choose(F)^2'))
         model.add_rule(Rule('Choose(+F) = 1 .'))
     
-    def reset(self, obj_goal):
+    def reset(self):
         """
         reset variables for each episodes
         """
@@ -244,10 +244,12 @@ class SG_Nav_Agent():
         self.goal_map = np.zeros(self.full_map.shape[-2:])
         self.found_long_goal = False
         self.history_pose = []
+        self.visualize_image_list = []
+        self.count_episodes = self.count_episodes + 1
         self.loop_time = 0
         self.stuck_time = 0
         self.metrics = {'distance_to_goal': 0., 'spl': 0., 'softspl': 0.}
-        self.obj_goal = obj_goal
+        self.obj_goal = self.simulator._env.current_episode.object_category
         ###########
         self.current_obj_predictions = []
         self.obj_locations = [[] for i in range(21)] # length equal to all the objects in reference matrix 
@@ -269,10 +271,7 @@ class SG_Nav_Agent():
         self.text_node = ''
         self.text_edge = ''
 
-        if hasattr(self, 'scenegraph'):
-            self.scenegraph.reset()
-        
-        os.system(f'rm -r {self.save_image_dir}')
+        self.scenegraph.reset()
         
     def detect_objects(self, observations):
         """
@@ -359,8 +358,6 @@ class SG_Nav_Agent():
             if self.found_goal:
                 self.found_goal = False
                 self.found_goal_times = 0
-                # self.double_found_goal = False
-                # self.triple_found_goal = False
                         
     def act(self, observations):
         """ 
@@ -397,16 +394,15 @@ class SG_Nav_Agent():
         self.rgb = observations["rgb"][:,:,[2,1,0]]
         observations["rgb_annotated"] = observations["rgb"]
 
-        if hasattr(self, 'scenegraph'):
-            self.scenegraph.set_agent(self)
-            self.scenegraph.set_navigate_steps(self.navigate_steps)
-            self.scenegraph.set_obj_goal(self.obj_goal)
-            self.scenegraph.set_room_map(self.room_map)
-            self.scenegraph.set_fbe_free_map(self.fbe_free_map)
-            self.scenegraph.set_observations(observations)
-            self.scenegraph.set_full_map(self.full_map)
-            self.scenegraph.set_full_pose(self.full_pose)
-            self.scenegraph.update_scenegraph()
+        self.scenegraph.set_agent(self)
+        self.scenegraph.set_navigate_steps(self.navigate_steps)
+        self.scenegraph.set_obj_goal(self.obj_goal)
+        self.scenegraph.set_room_map(self.room_map)
+        self.scenegraph.set_fbe_free_map(self.fbe_free_map)
+        self.scenegraph.set_observations(observations)
+        self.scenegraph.set_full_map(self.full_map)
+        self.scenegraph.set_full_pose(self.full_pose)
+        self.scenegraph.update_scenegraph()
         
         self.update_map(observations)
         self.update_free_map(observations)
@@ -448,7 +444,6 @@ class SG_Nav_Agent():
             if not self.found_goal: # if found a goal, directly go to it
                 return {"action": 6}
                     
-        
         if not (observations["gps"] == self.last_gps).all():
             self.move_steps += 1
             self.not_move_steps = 0
@@ -528,6 +523,9 @@ class SG_Nav_Agent():
             self.using_random_goal = True
             stg_y, stg_x, number_action = self._plan(traversible, self.goal_map, self.full_pose, cur_start, cur_start_o, self.found_goal)
         
+        if self.args.visualize:
+            self.visualize(traversible, observations, number_action)
+
         observations["pointgoal_with_gps_compass"] = self.get_relative_goal_gps(observations)
 
         ###-----------------------------------###
@@ -925,6 +923,68 @@ class SG_Nav_Agent():
         self.metrics['distance_to_goal'] = metrics['distance_to_goal']
         self.metrics['spl'] = metrics['spl']
         self.metrics['softspl'] = metrics['softspl']
+        if self.args.visualize:
+            if self.simulator._env.episode_over or self.total_steps == 500:
+                self.save_video()
+
+    def visualize(self, traversible, observations, number_action):
+        if self.args.visualize:
+            save_map = copy.deepcopy(torch.from_numpy(traversible))
+            gray_map = torch.stack((save_map, save_map, save_map))
+            paper_obstacle_map = copy.deepcopy(gray_map)[:,1:-1,1:-1]
+            paper_map = torch.zeros_like(paper_obstacle_map)
+            paper_map_trans = paper_map.permute(1,2,0)
+            unknown_rgb = colors.to_rgb('#FFFFFF')
+            paper_map_trans[:,:,:] = torch.tensor( unknown_rgb)
+            free_rgb = colors.to_rgb('#E7E7E7')
+            paper_map_trans[self.fbe_free_map.cpu().numpy()[0,0,::-1]>0.5,:] = torch.tensor( free_rgb).double()
+            obstacle_rgb = colors.to_rgb('#A2A2A2')
+            paper_map_trans[skimage.morphology.binary_dilation(self.full_map.cpu().numpy()[0,0,::-1]>0.5,skimage.morphology.disk(1)),:] = torch.tensor(obstacle_rgb).double()
+            paper_map_trans = paper_map_trans.permute(2,0,1)
+            self.visualize_agent_and_goal(paper_map_trans)
+            agent_coordinate = (int(self.history_pose[-1][0]*100/self.resolution), int((self.map_size_cm/100-self.history_pose[-1][1])*100/self.resolution))
+            occupancy_map = crop_around_point((paper_map_trans.permute(1, 2, 0) * 255).numpy().astype(np.uint8), agent_coordinate, (150, 200))
+            visualize_image = np.full((450, 800, 3), 255, dtype=np.uint8)
+            visualize_image = add_resized_image(visualize_image, observations["rgb_annotated"], (10, 60), (320, 240))
+            visualize_image = add_resized_image(visualize_image, occupancy_map, (340, 60), (180, 240))
+            visualize_image = add_rectangle(visualize_image, (10, 60), (330, 300), (128, 128, 128), thickness=1)
+            visualize_image = add_rectangle(visualize_image, (340, 60), (520, 300), (128, 128, 128), thickness=1)
+            visualize_image = add_rectangle(visualize_image, (540, 60), (790, 165), (128, 128, 128), thickness=1)
+            visualize_image = add_rectangle(visualize_image, (540, 195), (790, 300), (128, 128, 128), thickness=1)
+            visualize_image = add_rectangle(visualize_image, (10, 350), (790, 400), (128, 128, 128), thickness=1)
+            visualize_image = add_text(visualize_image, "Observation (Goal: Chair)", (70, 50), font_scale=0.5, thickness=1)
+            visualize_image = add_text(visualize_image, "Occupancy Map", (370, 50), font_scale=0.5, thickness=1)
+            visualize_image = add_text(visualize_image, "Scene Graph Nodes", (580, 50), font_scale=0.5, thickness=1)
+            visualize_image = add_text(visualize_image, "Scene Graph Edges", (580, 185), font_scale=0.5, thickness=1)
+            visualize_image = add_text(visualize_image, "LLM Explanation", (330, 340), font_scale=0.5, thickness=1)
+            visualize_image = add_text_list(visualize_image, line_list(self.text_node, 40), (550, 80), font_scale=0.3, thickness=1)
+            visualize_image = add_text_list(visualize_image, line_list(self.text_edge, 40), (550, 215), font_scale=0.3, thickness=1)
+            visualize_image = add_text_list(visualize_image, line_list(self.explanation, 150), (20, 370), font_scale=0.3, thickness=1)
+            visualize_image = visualize_image[:, :, ::-1]
+            self.visualize_image_list.append(visualize_image)
+
+    def save_video(self):
+        save_video_dir = os.path.join(self.visualization_dir, 'video')
+        save_video_path = f'{save_video_dir}/vid_{self.count_episodes:06d}.mp4'
+        if not os.path.exists(save_video_dir):
+            os.makedirs(save_video_dir)
+        height, width, layers = self.visualize_image_list[0].shape
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        video = cv2.VideoWriter(save_video_path, fourcc, 4.0, (width, height))
+        for visualize_image in self.visualize_image_list:  
+            video.write(visualize_image)
+        video.release()
+
+    def visualize_agent_and_goal(self, map):
+        for idx, pose in enumerate(self.history_pose):
+            draw_step_num = 30
+            alpha = max(0, 1 - (len(self.history_pose) - idx) / draw_step_num)
+            agent_size = 1
+            if idx == len(self.history_pose) - 1:
+                agent_size = 2
+            draw_agent(agent=self, map=map, pose=pose, agent_size=agent_size, color_index=0, alpha=alpha)
+        draw_goal(agent=self, map=map, goal_size=2, color_index=1)
+        return map
 
 
 def main():
@@ -945,7 +1005,7 @@ def main():
         "--error_analysis", default=False, type=bool, choices=[False, True]
     )
     parser.add_argument(
-        "--visulize", action='store_true'
+        "--visualize", action='store_true'
     )
     parser.add_argument(
         "--split_l", default=0, type=int

@@ -7,6 +7,9 @@ import torch
 import math
 import dataclasses
 import omegaconf
+import ollama
+import base64
+from io import BytesIO
 import supervision as sv
 from PIL import Image
 from sklearn.cluster import DBSCAN  
@@ -21,9 +24,6 @@ from utils.utils_scenegraph.mapping import compute_spatial_similarities, merge_d
 from grounded_sam_demo import load_image, load_model, get_grounding_output
 import GroundingDINO.groundingdino.datasets.transforms as T
 from segment_anything import sam_model_registry, SamPredictor, SamAutomaticMaskGenerator
-
-from model_server.llm_client import LLM_Client
-from model_server.vlm_client import VLM_Client
 
 
 ADDITIONAL_PSL_OPTIONS = {
@@ -165,6 +165,8 @@ class SceneGraph():
         self.is_navigation = is_navigation
         self.reasoning = 'both'
         self.PSL_infer = 'one_hot'
+        self.llm_name = 'llama3.2-vision'
+        self.vlm_name = 'llama3.2-vision'
         self.set_cfg()
         
         self.groundingdino_config_file = '/home/user001/yh/Grounded-Segment-Anything/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py'
@@ -194,15 +196,13 @@ on
 next to
 Object pair(s):
         '''
-        self.prompt_discriminate_relation = 'In the image, do {} and {} satisfy the relationship of {}? Answer "yes" or "no".'
+        self.prompt_discriminate_relation = 'In the image, do {} and {} satisfy the relationship of {}? Only answer "yes" or "no".'
         self.prompt_room_predict = 'Which room is the most likely to have the [{}] in: [{}]. Only answer the room.'
         self.prompt_graph_corr_0 = 'What is the probability of A and B appearing together. [A:{}], [B:{}]. Even if you do not have enough information, you have to answer with a value from 0 to 1 anyway. Answer only the value of probability and do not answer any other text.'
         self.prompt_graph_corr_1 = 'What else do you need to know to determine the probability of A and B appearing together? [A:{}], [B:{}]. Please output a short question (output only one sentence with no additional text).'
         self.prompt_graph_corr_2 = 'Here is the objects and relationships near A: [{}] You answer the following question with a short sentence based on this information. Question: {}'
         self.prompt_graph_corr_3 = 'The probability of A and B appearing together is about {}. Based on the dialog: [{}], re-determine the probability of A and B appearing together. A:[{}], B:[{}]. Even if you do not have enough information, you have to answer with a value from 0 to 1 anyway. Answer only the value of probability and do not answer any other text.'
         self.mask_generator = self.get_sam_mask_generator(self.sam_variant, self.device)
-        self.llm = LLM_Client()
-        self.vlm = VLM_Client()
 
     def set_cfg(self):
         cfg = {'dataset_config': PosixPath('tools/replica.yaml'), 'scene_id': 'room0', 'start': 0, 'end': -1, 'stride': 5, 'image_height': 680, 'image_width': 1200, 'gsa_variant': 'none', 'detection_folder_name': 'gsa_detections_${gsa_variant}', 'det_vis_folder_name': 'gsa_vis_${gsa_variant}', 'color_file_name': 'gsa_classes_${gsa_variant}', 'device': 'cuda', 'use_iou': True, 'spatial_sim_type': 'overlap', 'phys_bias': 0.0, 'match_method': 'sim_sum', 'semantic_threshold': 0.5, 'physical_threshold': 0.5, 'sim_threshold': 1.2, 'use_contain_number': False, 'contain_area_thresh': 0.95, 'contain_mismatch_penalty': 0.5, 'mask_area_threshold': 25, 'mask_conf_threshold': 0.95, 'max_bbox_area_ratio': 0.5, 'skip_bg': True, 'min_points_threshold': 16, 'downsample_voxel_size': 0.025, 'dbscan_remove_noise': True, 'dbscan_eps': 0.1, 'dbscan_min_points': 10, 'obj_min_points': 0, 'obj_min_detections': 3, 'merge_overlap_thresh': 0.7, 'merge_visual_sim_thresh': 0.8, 'merge_text_sim_thresh': 0.8, 'denoise_interval': 20, 'filter_interval': -1, 'merge_interval': 20, 'save_pcd': True, 'save_suffix': 'overlap_maskconf0.95_simsum1.2_dbscan.1_merge20_masksub', 'vis_render': False, 'debug_render': False, 'class_agnostic': True, 'save_objects_all_frames': True, 'render_camera_path': 'replica_room0.json', 'max_num_points': 512}
@@ -760,8 +760,29 @@ Object pair(s):
         self.update_edge()
     
     def get_llm_response(self, prompt):
-        response = self.llm(prompt)
-        return response
+        response = ollama.chat(
+            model=self.llm_name,
+            messages=[{
+                'role': 'user',
+                'content': prompt,
+            }]
+        )
+        return response.message.content
+    
+    def get_vlm_response(self, prompt, image):
+        buffered = BytesIO()
+        image.save(buffered, format='PNG')
+        image_bytes = base64.b64encode(buffered.getvalue())
+        image_str = str(image_bytes, 'utf-8')
+        response = ollama.chat(
+            model=self.vlm_name,
+            messages=[{
+                'role': 'user',
+                'content': prompt,
+                'images': [image_str]
+            }]
+        )
+        return response.message.content
         
     def find_modes(self, lst):  
         if len(lst) == 0:
@@ -791,10 +812,45 @@ Object pair(s):
         image = Image.fromarray(image)
         return image
 
+    def score(self, frontier_locations_16, num_16_frontiers):
+        scores = np.zeros((num_16_frontiers))
+        for i, loc in enumerate(frontier_locations_16):
+            sub_room_map = self.agent.room_map[0,:,max(0,loc[0]-12):min(self.agent.map_size-1,loc[0]+13), max(0,loc[1]-12):min(self.agent.map_size-1,loc[1]+13)].cpu().numpy() # sub_room_map.shape = [9, 25, 25], select the room map around the frontier
+            whether_near_room = np.max(np.max(sub_room_map, 1),1)
+            score_1 = np.clip(1-(1-self.agent.prob_array_room)-(1-whether_near_room), 0, 10)
+            score_2 = 1- np.clip(self.agent.prob_array_room+(1-whether_near_room), -10,1)
+            scores[i] = np.sum(score_1) - np.sum(score_2)
+        for i in range(21):
+            num_obj = len(self.agent.obj_locations[i])
+            if num_obj <= 0:
+                continue
+            frontier_location_mtx = np.tile(frontier_locations_16, (num_obj,1,1))
+            obj_location_mtx = np.array(self.agent.obj_locations[i])[:,1:]
+            obj_confidence_mtx = np.tile(np.array(self.agent.obj_locations[i])[:,0],(num_16_frontiers,1)).transpose(1,0)
+            obj_location_mtx = np.tile(obj_location_mtx, (num_16_frontiers,1,1)).transpose(1,0,2)
+            dist_frontier_obj = np.square(frontier_location_mtx - obj_location_mtx)
+            dist_frontier_obj = np.sqrt(np.sum(dist_frontier_obj, axis=2)) / 20
+            near_frontier_obj = dist_frontier_obj < 1.6
+            obj_confidence_mtx[near_frontier_obj==False] = 0
+            obj_confidence_max = np.max(obj_confidence_mtx, axis=0)
+            score_1 = np.clip(1-(1-self.agent.prob_array_obj[i])-(1-obj_confidence_max), 0, 10)
+            score_2 = 1- np.clip(self.agent.prob_array_obj[i]+(1-obj_confidence_max), -10,1)
+            scores += score_1 - score_2
+
+        predict_goal_xy = self.insert_goal()
+        if predict_goal_xy is not None:
+            predict_goal_xy = np.array(predict_goal_xy).reshape(1, 2)
+            distance = np.linalg.norm(predict_goal_xy - frontier_locations_16, axis=1)
+            score = np.tile(1, (num_16_frontiers))
+            score[distance > 32] = 0
+            score = score / distance
+            scores += score
+        return scores
+
     def discriminate_relation(self, edge):
         image = self.get_joint_image(edge.node1, edge.node2)
         if image is not None:
-            response = self.vlm(self.prompt_discriminate_relation.format(edge.node1.caption, edge.node2.caption, edge.relation), image)
+            response = self.get_vlm_response(self.prompt_discriminate_relation.format(edge.node1.caption, edge.node2.caption, edge.relation), image)
             if 'yes' in response.lower():
                 return True
             else:
@@ -828,35 +884,6 @@ Object pair(s):
             if self.agent.total_steps % 2 == 0 and self.agent.args.reasoning in ['both','room']:
                 room_detection_result = self.agent.glip_demo.inference(self.observations["rgb"][:,:,[2,1,0]], self.agent.rooms_captions)
                 self.agent.update_room_map(self.observations, room_detection_result)
-
-    def score(self, frontier_locations_16, num_16_frontiers):
-        scores = np.zeros((num_16_frontiers))
-        for i in range(21):
-            num_obj = len(self.agent.obj_locations[i])
-            if num_obj <= 0:
-                continue
-            frontier_location_mtx = np.tile(frontier_locations_16, (num_obj,1,1))
-            obj_location_mtx = np.array(self.agent.obj_locations[i])[:,1:]
-            obj_confidence_mtx = np.tile(np.array(self.agent.obj_locations[i])[:,0],(num_16_frontiers,1)).transpose(1,0)
-            obj_location_mtx = np.tile(obj_location_mtx, (num_16_frontiers,1,1)).transpose(1,0,2)
-            dist_frontier_obj = np.square(frontier_location_mtx - obj_location_mtx)
-            dist_frontier_obj = np.sqrt(np.sum(dist_frontier_obj, axis=2)) / 20
-            near_frontier_obj = dist_frontier_obj < 1.6
-            obj_confidence_mtx[near_frontier_obj==False] = 0
-            obj_confidence_max = np.max(obj_confidence_mtx, axis=0)
-            score_1 = np.clip(1-(1-self.agent.prob_array_obj[i])-(1-obj_confidence_max), 0, 10)
-            score_2 = 1- np.clip(self.agent.prob_array_obj[i]+(1-obj_confidence_max), -10,1)
-            scores += score_1 - score_2
-
-        predict_goal_xy = self.insert_goal()
-        if predict_goal_xy is not None:
-            predict_goal_xy = np.array(predict_goal_xy).reshape(1, 2)
-            distance = np.linalg.norm(predict_goal_xy - frontier_locations_16, axis=1)
-            score = np.tile(np.array(10), (num_16_frontiers))
-            score[distance > 32] = 0
-            score = score / distance
-            scores += score
-        return scores
 
     def reset(self):
         full_w, full_h = self.map_size, self.map_size

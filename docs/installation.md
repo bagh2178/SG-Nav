@@ -35,4 +35,4 @@ Install Grounded SAM according to [here](https://github.com/IDEA-Research/Ground
 In `scenegraph.py`, change the path `'/path/to/Grounded-Segment-Anything/'` to your installation path of Grounded SAM.
 
 **Step 6**
-Install Ollama from [here](https://ollama.com/). Deploy llama3.3 70b as the LLM and llama3.2-vision 90b as the VLM. Replace the `LLM_Client` and `VLM_Client` in `scenegraph.py` with Ollama.
+Install Ollama with `curl -fsSL https://ollama.com/install.sh | sh`. Deploy llama3.2 as the LLM and VLM.

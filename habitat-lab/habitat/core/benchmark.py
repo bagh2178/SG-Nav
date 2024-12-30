@@ -145,10 +145,10 @@ class Benchmark:
         all_metrics_0 = []
         all_metrics_avg = []
         count_success = 0
-        agent.benchmark = self
+        agent.simulator = self
         while count_episodes < num_episodes:
             observations = self._env.reset()
-            agent.reset(obj_goal=self._env.current_episode.object_category)
+            agent.reset()
             metrics = self._env.get_metrics()
             all_metrics_0.append(metrics)
             while not self._env.episode_over:
@@ -157,6 +157,8 @@ class Benchmark:
                     metrics = self._env.get_metrics()
                 observations = self._env.step(action)
                 agent.update_metrics(self._env.get_metrics())
+                if self._env.episode_over:
+                    print('!!!!!!!!!!!!action={}'.format(action))
 
             metrics = self._env.get_metrics()
             all_metrics.append(metrics)
@@ -196,52 +198,7 @@ class Benchmark:
                     # write each item on a new line
                     fp.write("%s\n" % item)
 
-            def result_text_list():
-                success_text = 'success' if metrics['success'] == 1 else 'fail'
-                text_list = [
-                    success_text,
-                    '',
-                    'distance_to_goal_mean: {}'.format(avg_metrics['distance_to_goal']),
-                    'success_rate: {}'.format(avg_metrics['success']),
-                    'spl_mean: {}'.format(avg_metrics['spl']),
-                    'softspl_mean: {}'.format(avg_metrics['softspl']),
-                ]
-                return text_list
             
-            def add_text(image: torch.Tensor, text_list: list, coordinate=(5, 5)):
-                image = image.numpy()
-                image = Image.fromarray(image)
-                draw = ImageDraw.Draw(image)
-                text = ''
-                for t in text_list:
-                    text = text + t + '\n'
-                draw.text(coordinate, text, fill='black')
-                image = np.array(image)
-                return image
-
-            def save_video(experiment_name, metrics):
-                image_dir = f"figures/{experiment_name}/image"
-                image_file_list = os.listdir(image_dir)
-                image_file_list = sorted(image_file_list)
-                image_path_list = [os.path.join(image_dir, image_file) for image_file in image_file_list]
-                save_video_dir = f'figures/{experiment_name}/video'
-                episode_index = count_episodes - 1
-                success = 'success' if metrics['success'] == 1 else 'fail'
-                save_video_path = f'{save_video_dir}/vid_{episode_index:06d}_{success}.mp4'
-                if not os.path.exists(save_video_dir):
-                    os.makedirs(save_video_dir)
-                frame = cv2.imread(image_path_list[0])  
-                height, width, layers = frame.shape  
-                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                video = cv2.VideoWriter(save_video_path, fourcc, 4.0, (width, height))
-                for image in image_path_list:  
-                    video.write(cv2.imread(image))
-                text_list = result_text_list()
-                image = torch.tensor(cv2.imread(image))
-                image = add_text(image, text_list, (5, 350))
-                video.release()
-            
-            # save_video(experiment_name, metrics)  # visulization
             
             
         avg_metrics = {k: v / count_episodes for k, v in agg_metrics.items()}
@@ -263,12 +220,3 @@ class Benchmark:
             return self.remote_evaluate(agent, num_episodes)
         else:
             return self.local_evaluate(agent, num_episodes)
-        
-    def visualization(self, agent, action, observations):
-        if not hasattr(agent, 'agent_state_image') or agent.demo_img is None:
-            return
-        save_image_dir = f'figures/{agent.experiment_name}/image'
-        if not os.path.exists(save_image_dir):
-            os.makedirs(save_image_dir)
-        save_image(agent.demo_img, os.path.join(save_image_dir, f'img_{agent.navigate_steps:06d}.png'))
-        agent.demo_img = None

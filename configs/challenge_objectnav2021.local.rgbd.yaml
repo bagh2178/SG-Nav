@@ -49,7 +49,5 @@ TASK:
 DATASET:
   TYPE: ObjectNav-v1
   SPLIT: val
-  # DATA_PATH: habitat-challenge-data/data/{split}/{split}.json.gz
-  # SCENES_DIR: "habitat-challenge-data/data/scene_datasets/"
   DATA_PATH: /path/to/MatterPort3D/objectnav/mp3d/v1/{split}/{split}.json.gz
   SCENES_DIR: "/path/to/MatterPort3D/"
