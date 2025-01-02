@@ -34,9 +34,29 @@ Method Pipeline:
 
 **Step 1 (Dataset)**
 
-Download Matterport3D scene dataset from [here](https://niessner.github.io/Matterport/).
-Download object-goal navigation episodes dataset from [here](https://github.com/facebookresearch/habitat-lab/blob/main/DATASETS.md).
+Download Matterport3D scene dataset from [here](https://niessner.github.io/Matterport/). Download object-goal navigation episodes dataset from [here](https://github.com/facebookresearch/habitat-lab/blob/main/DATASETS.md).
+
 According to your dataset path, set the scene dataset path (SCENES_DIR) and episode dataset path (DATA_PATH) in config file `configs/challenge_objectnav2021.local.rgbd.yaml`.
+
+The structure of the dataset is outlined as follows:
+```
+MatterPort3D/
+├── mp3d/
+│   ├── 17DRP5sb8fy/
+│   │   └── 17DRP5sb8fy.glb
+│   ├── 1LXtFkjw3qL/
+│   │   └── 1LXtFkjw3qL.glb
+│   └── ...
+└── objectnav/
+    └── mp3d/
+        └── v1/
+            └── val/
+                ├── content/
+                │   ├── 2azQ1b91cZZ.json.gz
+                │   ├── 8194nk5LbLH.json.gz
+                │   └── ...
+                └── val.json.gz
+```
 
 **Step 2 (Environment)**
 
@@ -60,7 +80,7 @@ cp tools/agent.py ${HABITAT_SIM_PATH}/habitat_sim/agent/
 
 **Step 4 (Package)**
 
-Install pytorch, pytorch3d and faiss. Install other packages.
+Install pytorch<=1.9, pytorch3d and faiss. Install other packages.
 ```
 conda install -c pytorch faiss-gpu=1.8.0
 pip install torch==1.9.1+cu111 torchvision==0.10.1+cu111 -f https://download.pytorch.org/whl/torch_stable.html
