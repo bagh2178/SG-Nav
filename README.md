@@ -36,7 +36,7 @@ Method Pipeline:
 
 Download Matterport3D scene dataset from [here](https://niessner.github.io/Matterport/). Download object-goal navigation episodes dataset from [here](https://github.com/facebookresearch/habitat-lab/blob/main/DATASETS.md).
 
-According to your dataset path, set the scene dataset path (SCENES_DIR) and episode dataset path (DATA_PATH) in config file `configs/challenge_objectnav2021.local.rgbd.yaml`.
+Set your scene dataset path `SCENES_DIR` and episode dataset path `DATA_PATH` in config file `configs/challenge_objectnav2021.local.rgbd.yaml`.
 
 The structure of the dataset is outlined as follows:
 ```
