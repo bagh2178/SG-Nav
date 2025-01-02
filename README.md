@@ -92,6 +92,8 @@ Install Grounded SAM.
 ```
 pip install -e segment_anything
 pip install --no-build-isolation -e GroundingDINO
+wget -O segment_anything/sam_vit_h_4b8939.pth https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
+wget -O GroundingDINO/groundingdino_swint_ogc.pth https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth
 ```
 
 Install GLIP model and download GLIP checkpoint.
