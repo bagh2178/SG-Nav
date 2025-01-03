@@ -7,3 +7,4 @@ glip_large_model.pth
 *.so
 segment_anything/sam_vit_h_4b8939.pth
 GroundingDINO/groundingdino_swint_ogc.pth
+.vscode

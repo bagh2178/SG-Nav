@@ -142,10 +142,7 @@ class SceneGraph():
         self.visited = torch.zeros(full_w, full_h).float().cpu().numpy()
         self.num_of_goal = torch.zeros(full_w, full_h).int()
         self.camera_matrix = camera_matrix
-        self.GSA_PATH = os.environ["GSA_PATH"]
         self.SAM_ENCODER_VERSION = "vit_h"
-        self.SAM_CHECKPOINT_PATH = os.path.join(self.GSA_PATH, "./sam_vit_h_4b8939.pth")
-        self.sam_variant = 'sam'
         self.sam_variant = 'groundedsam'
         self.device = 'cuda'
         self.classes = ['item']
@@ -284,7 +281,7 @@ Object pair(s):
 
     def get_sam_mask_generator(self, variant:str, device) -> SamAutomaticMaskGenerator:
         if variant == "sam":
-            sam = sam_model_registry[self.SAM_ENCODER_VERSION](checkpoint=self.SAM_CHECKPOINT_PATH)
+            sam = sam_model_registry[self.SAM_ENCODER_VERSION](checkpoint=self.sam_checkpoint)
             sam.to(device)
             mask_generator = SamAutomaticMaskGenerator(
                 model=sam,
