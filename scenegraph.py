@@ -174,13 +174,15 @@ class SceneGraph():
         self.N_max = 10
         self.node_space = 'table. tv. chair. cabinet. sofa. bed. windows. kitchen. bedroom. living room. mirror. plant. curtain. painting. picture'
         self.prompt_edge_proposal = '''
-Provide the most possible single spatial relationship for each of the following object pairs. Answer with only one relationship per pair, and separate each answer with a newline character.
-Examples:
+Provide the most possible single spatial relationship for each of the following object pairs. Answer with only one relationship per pair, and separate each answer with a newline character. Do not response superfluous text.
+Example 1:
 Input:
 Object pair(s):
 (cabinet, chair)
 Output:
 next to
+
+Example 2:
 Input:
 Object pair(s):
 (table, lamp)
@@ -188,8 +190,11 @@ Object pair(s):
 Output:
 on
 next to
+
+Now input is: 
 Object pair(s):
         '''
+        self.prompt_relation = 'What is the spatial relationship between the {} and the {} in the image? You can only answer a word or phrase that describes a spatial relationship.'
         self.prompt_discriminate_relation = 'In the image, do {} and {} satisfy the relationship of {}? Only answer "yes" or "no".'
         self.prompt_room_predict = 'Which room is the most likely to have the [{}] in: [{}]. Only answer the room.'
         self.prompt_graph_corr_0 = 'What is the probability of A and B appearing together. [A:{}], [B:{}]. Even if you do not have enough information, you have to answer with a value from 0 to 1 anyway. Answer only the value of probability and do not answer any other text.'
@@ -654,6 +659,18 @@ Object pair(s):
                 new_edge = Edge(new_node1, new_node2)
                 new_edges.append(new_edge)
         # get all new_edges
+        new_edges = set()
+        for i, node in enumerate(self.nodes):
+            node_new_edges = set(filter(lambda edge: edge.relation is None, node.edges))
+            new_edges = new_edges | node_new_edges
+        new_edges = list(new_edges)
+        for new_edge in new_edges:
+            image = self.get_joint_image(new_edge.node1, new_edge.node2)
+            if image is not None:
+                prompt = self.prompt_relation.format(new_edge.node1.caption, new_edge.node2.caption)
+                response = self.get_vlm_response(prompt=prompt, image=image)
+                response = response.replace('.', '').lower()
+                new_edge.set_relation(response)
         new_edges = set()
         for i, node in enumerate(self.nodes):
             node_new_edges = set(filter(lambda edge: edge.relation is None, node.edges))
