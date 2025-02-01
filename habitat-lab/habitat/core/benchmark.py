@@ -159,7 +159,9 @@ class Benchmark:
                 agent.update_metrics(self._env.get_metrics())
 
             metrics = self._env.get_metrics()
+            metrics['goal'] = agent.obj_goal
             all_metrics.append(metrics)
+            metrics = self._env.get_metrics()
             print(count_episodes, metrics)
             if metrics['success'] == 1:
                 count_success += 1

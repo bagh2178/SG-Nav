@@ -8,3 +8,5 @@ glip_large_model.pth
 segment_anything/sam_vit_*
 GroundingDINO/groundingdino_swint_ogc.pth
 .vscode
+start.py
+start_multiprocess.py

@@ -73,6 +73,7 @@ class GroupNode():
 class ObjectNode():
     def __init__(self):
         self.is_new_node = True
+        self.is_goal_node = False
         self.caption = None
         self.object = None
         self.reason = None
@@ -132,7 +133,7 @@ class Edge():
 
 
 class SceneGraph():
-    def __init__(self, map_resolution, map_size_cm, map_size, camera_matrix, is_navigation=True) -> None:
+    def __init__(self, map_resolution, map_size_cm, map_size, camera_matrix, is_navigation=True, agent=None) -> None:
         self.map_resolution = map_resolution
         self.map_size_cm = map_size_cm
         self.map_size = map_size
@@ -157,22 +158,22 @@ class SceneGraph():
         self.init_room_nodes()
         self.reason_visualization = ''
         self.is_navigation = is_navigation
-        self.reasoning = 'both'
-        self.PSL_infer = 'one_hot'
         self.llm_name = 'llama3.2-vision'
         self.vlm_name = 'llama3.2-vision'
-        self.set_cfg()
+        self.seg_xyxy = None
+        self.seg_caption = None
         
         self.groundingdino_config_file = 'GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py'
-        self.groundingdino_checkpoint = 'GroundingDINO/groundingdino_swint_ogc.pth'
+        self.groundingdino_checkpoint = 'data/models/groundingdino_swint_ogc.pth'
         self.sam_version = 'vit_h'
-        self.sam_checkpoint = 'segment_anything/sam_vit_h_4b8939.pth'
+        self.sam_checkpoint = 'data/models/sam_vit_h_4b8939.pth'
         self.segment2d_results = []
         self.max_detections_per_object = 10
-        self.threshold_list = {'bathtub': 3, 'bed': 3, 'cabinet': 2, 'chair': 1, 'chest_of_drawers': 3, 'clothes': 2, 'counter': 1, 'cushion': 3, 'fireplace': 3, 'gym_equipment': 2, 'picture': 3, 'plant': 3, 'seating': 0, 'shower': 2, 'sink': 2, 'sofa': 2, 'stool': 2, 'table': 1, 'toilet': 3, 'towel': 2, 'tv_monitor': 0}
+        self.threshold_list = {'bathtub': 2, 'bed': 7, 'cabinet': 3, 'chair': 5, 'chest_of_drawers': 5, 'clothes': 9, 'counter': 4, 'cushion': 7, 'fireplace': 4, 'gym_equipment': 7, 'picture': 9, 'plant': 3, 'seating': 2, 'shower': 2, 'sink': 3, 'sofa': 9, 'stool': 5, 'table': 8, 'toilet': 3, 'towel': 4, 'tv_monitor': 2, 'treadmill. fitness equipment.': 0}
+        self.small_objects = ['bathtub', 'chest_of_drawers', 'cushion', 'plant', 'seating', 'shower', 'toilet', 'tv_monitor']
         self.found_goal_times_threshold = 1
         self.N_max = 10
-        self.node_space = 'table. tv. chair. cabinet. sofa. bed. windows. kitchen. bedroom. living room. mirror. plant. curtain. painting. picture'
+        self.node_space = 'bathtub. bed. cabinet. chair. drawers. clothes. counter. cushion. fireplace. gym. picture. plant. seating. shower. sink. sofa. stool. table. toilet. towel. tv. treadmill. fitness equipment.'
         self.prompt_edge_proposal = '''
 Provide the most possible single spatial relationship for each of the following object pairs. Answer with only one relationship per pair, and separate each answer with a newline character. Do not response superfluous text.
 Example 1:
@@ -202,6 +203,8 @@ Object pair(s):
         self.prompt_graph_corr_2 = 'Here is the objects and relationships near A: [{}] You answer the following question with a short sentence based on this information. Question: {}'
         self.prompt_graph_corr_3 = 'The probability of A and B appearing together is about {}. Based on the dialog: [{}], re-determine the probability of A and B appearing together. A:[{}], B:[{}]. Even if you do not have enough information, you have to answer with a value from 0 to 1 anyway. Answer only the value of probability and do not answer any other text.'
         self.mask_generator = self.get_sam_mask_generator(self.sam_variant, self.device)
+        self.set_cfg()
+        self.set_agent(agent)
 
     def reset(self):
         full_w, full_h = self.map_size, self.map_size
@@ -231,8 +234,11 @@ Object pair(s):
     def set_agent(self, agent):
         self.agent = agent
 
-    def set_obj_goal(self, obj_goal):
+    def set_obj_goal(self, obj_goal, obj_goal_sg):
         self.obj_goal = obj_goal
+        self.obj_goal_sg = obj_goal_sg
+        if self.obj_goal in self.threshold_list:
+            self.cfg.obj_min_detections = self.threshold_list[self.obj_goal]
 
     def set_navigate_steps(self, navigate_steps):
         self.navigate_steps = navigate_steps
@@ -596,7 +602,7 @@ Object pair(s):
                 caption_list = []
                 for idx_det in range(len(object["image_idx"])):
                     caption = self.segment2d_results[object["image_idx"][idx_det]]['caption'][object["mask_idx"][idx_det]]
-                    caption_list.append(caption)
+                    caption_list = caption_list + caption.split(' ')
                 caption = self.find_modes(caption_list)[0]
                 object['captions'] = [caption]
 
@@ -635,6 +641,8 @@ Object pair(s):
                     node.room_node.nodes.discard(node)
                 node.room_node = self.room_nodes[room_label]
                 node.room_node.nodes.add(node)
+            if node.caption in self.obj_goal_sg:
+                node.is_goal_node = True
 
     def update_edge(self):
         old_nodes = []
@@ -714,7 +722,7 @@ Object pair(s):
 
     def insert_goal(self, goal=None):
         if goal is None:
-            goal = self.obj_goal
+            goal = self.obj_goal_sg
         self.update_group()
         room_node_text = ''
         for room_node in self.room_nodes:
@@ -865,11 +873,9 @@ Object pair(s):
             return True
         
     def perception(self):
-        N_stop = self.threshold_list[self.obj_goal]
-        N_stop = min(N_stop, self.N_max)
-        if self.agent.found_goal_times < N_stop:
+        if not self.agent.found_goal:
             self.agent.detect_objects(self.observations)
-            if self.agent.total_steps % 2 == 0 and self.agent.args.reasoning in ['both','room']:
+            if self.agent.total_steps % 2 == 0:
                 room_detection_result = self.agent.glip_demo.inference(self.observations["rgb"][:,:,[2,1,0]], self.agent.rooms_captions)
                 self.agent.update_room_map(self.observations, room_detection_result)
 

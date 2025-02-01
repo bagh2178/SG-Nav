@@ -10,10 +10,9 @@ from .iou import compute_3d_iou_accuracte_batch, compute_iou_batch, mask_subtrac
 
 
 def filter_objects(cfg, objects: MapObjectList):
-    # Remove the object that has very few points or viewed too few times
     objects_to_keep = []
     for obj in objects:
-        if len(obj['pcd'].points) >= cfg.obj_min_points and obj['num_detections'] >= cfg.obj_min_detections:
+        if len(obj['pcd'].points) >= cfg.obj_min_points and obj['num_detections'] >= cfg.obj_min_detections and (np.array(obj['pcd'].points).max(axis=0) - np.array(obj['pcd'].points).min(axis=0)).max() > 0.4:
             objects_to_keep.append(obj)
     objects = MapObjectList(objects_to_keep)
     
