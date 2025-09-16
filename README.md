@@ -11,6 +11,7 @@ We propose a <b>zero-shot</b> object-goal navigation framework by constructing a
 
 
 ## News
+- [2025/08/01]: [GC-VLN](https://bagh2178.github.io/GC-VLN/) is accepted to CoRL 2025! This is a further extension of our scene graph-based navigation series which solves the problem of vision-and-language navigation with graph constraint.
 - [2025/02/27]: [UniGoal](https://github.com/bagh2178/UniGoal), an extended version of SG-Nav which unifies different goal-oriented navigation tasks, is accepted to CVPR 2025!
 - [2024/12/30]: We update the code and simplify the installation.
 - [2024/09/26]: SG-Nav is accepted to NeurIPS 2024!
